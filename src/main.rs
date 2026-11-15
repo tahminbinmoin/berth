@@ -636,7 +636,8 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_LBUTTONUP => {
-            let _ = ReleaseCapture();
+            // Work out the click *before* releasing mouse capture: releasing
+            // it sends WM_CAPTURECHANGED, which cancels any pending press.
             let shift = apps::shift_down();
             let r = with_app(|a| {
                 let (click, reorder) = a.dock.on_button_up(x, y);
@@ -650,6 +651,7 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
                 }
                 click
             });
+            let _ = ReleaseCapture();
             if let Some(Some(idx)) = r {
                 perform(Action::Open {
                     idx,
