@@ -249,8 +249,9 @@ The `-ExecutionPolicy Bypass` switch only applies to that single script run. It 
 change your system's PowerShell policy.
 
 Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)):
-every push is built, tested and self-tested on Windows, and pushing a `v*` tag publishes
-the zip and its SHA-256 checksum to GitHub Releases. See [CONTRIBUTING.md](CONTRIBUTING.md)
+every push is built, tested and self-tested on Windows, and when `main` carries a version
+that hasn't been released yet, the zip and its SHA-256 checksum are published to GitHub
+Releases automatically. See [CONTRIBUTING.md](CONTRIBUTING.md)
 for the code layout and for cross-compiling from Linux.
 
 ### How it's built

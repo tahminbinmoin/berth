@@ -81,8 +81,9 @@ python tools/gen_notices.py    # THIRD_PARTY_NOTICES.md (run after changing depe
 
 1. Update `version` in `Cargo.toml` and `assets/berth.rc`, and the version in the README's
    install steps.
-2. Commit, then tag: `git tag v0.2.0 && git push origin v0.2.0`.
-3. GitHub Actions builds, self-tests and publishes `Berth-<version>-windows-x64.zip` and
-   its `.sha256` file to the release.
+2. Commit and push to `main` (or merge a pull request).
+3. GitHub Actions builds, self-tests and, because that version has no release yet, creates
+   the `v<version>` tag and a release with `Berth-<version>-windows-x64.zip` and its
+   `.sha256` file.
 
 By contributing you agree that your contributions are licensed under the MIT License.

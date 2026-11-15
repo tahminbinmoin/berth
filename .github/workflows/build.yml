@@ -12,11 +12,20 @@ permissions:
 
 jobs:
   build:
+    outputs:
+      version: ${{ steps.version.outputs.version }}
     # Windows Server 2025 shares the Windows 11 24H2 code base (build 26100),
     # so Berth's Windows 11 check passes and the self-test can run.
     runs-on: windows-2025
     steps:
       - uses: actions/checkout@v4
+
+      - name: Read version
+        id: version
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Show toolchain
         run: |
@@ -63,8 +72,10 @@ jobs:
             self-test.txt
             preview.png
 
+  # Publishes a GitHub release when main (or a v* tag) carries a version
+  # that has not been released yet. Bump `version` in Cargo.toml to release.
   release:
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
     needs: build
     runs-on: ubuntu-latest
     permissions:
@@ -77,7 +88,22 @@ jobs:
       - name: Create GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.build.outputs.version }}
         run: |
-          gh release create "$GITHUB_REF_NAME" artifacts/dist/*.zip artifacts/dist/*.sha256 \
-            --repo "$GITHUB_REPOSITORY" --title "Berth $GITHUB_REF_NAME" \
-            --notes "See the README for installation steps. This build is not code-signed; verify the SHA-256 checksum before running it."
+          TAG="v$VERSION"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; nothing to do."
+            exit 0
+          fi
+          cat > notes.md <<NOTES
+          Berth $VERSION: a lightweight Mac-style dock for Windows 11.
+
+          **Download:** \`Berth-$VERSION-windows-x64.zip\` below, then follow the [installation steps in the README](https://github.com/$GITHUB_REPOSITORY#install).
+
+          - Requires Windows 11 (64-bit). Portable: no installer, no admin rights, no internet access.
+          - This build is **not code-signed**, so Windows SmartScreen may warn on first run. Verify the SHA-256 checksum (\`.sha256\` file) before running it.
+          - Built, unit-tested and self-tested on Windows by GitHub Actions from commit $GITHUB_SHA.
+          NOTES
+          gh release create "$TAG" artifacts/dist/*.zip artifacts/dist/*.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "Berth $VERSION" --notes-file notes.md
