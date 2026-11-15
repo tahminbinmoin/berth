@@ -33,7 +33,16 @@ const CTRL_X: i32 = X0 + 180;
 const CTRL_W: i32 = 250;
 const VALUE_X: i32 = CTRL_X + CTRL_W + 8;
 
-const PAGES: [&str; 5] = ["General", "Appearance", "Behavior", "Apps", "About"];
+const PAGES: [&str; 6] = [
+    "General",
+    "Appearance",
+    "Behavior",
+    "Apps",
+    "Updates",
+    "About",
+];
+pub const UPDATES_PAGE: usize = 4;
+const ABOUT_PAGE: usize = 5;
 
 // Control IDs.
 const NAV: u16 = 100;
@@ -76,14 +85,22 @@ const APPS_NOTE: u16 = 508;
 const ABOUT_TEXT: u16 = 600;
 const WEBSITE: u16 = 601;
 const LOGS: u16 = 602;
+const UPD_VERSION: u16 = 700;
+const UPD_CHECK: u16 = 701;
+const UPD_STATUS: u16 = 702;
+const UPD_AUTO: u16 = 703;
+const UPD_NOTE: u16 = 704;
+const UPD_RELEASES: u16 = 705;
 const TITLE_BASE: u16 = 900;
 
-const NOTES: [u16; 5] = [
+const NOTES: [u16; 7] = [
     AUTOSTART_NOTE,
     BG_NOTE,
     BEHAVIOR_NOTE,
     APPS_NOTE,
     ABOUT_TEXT,
+    UPD_STATUS,
+    UPD_NOTE,
 ];
 
 struct Dash {
@@ -103,6 +120,7 @@ struct Dash {
 }
 
 thread_local! {
+    static UPDATE_STATUS: RefCell<(String, bool)> = const { RefCell::new((String::new(), false)) };
     static DASH: RefCell<Option<Dash>> = const { RefCell::new(None) };
     static BUILD_DPI: Cell<u32> = const { Cell::new(96) };
 }
@@ -215,6 +233,22 @@ pub fn open_page(page: usize) {
 
 pub fn open() {
     open_page(0);
+}
+
+/// The dashboard window, if open (used as the owner for message boxes).
+pub fn window() -> Option<HWND> {
+    hwnd()
+}
+
+/// Shows update progress on the Updates page (kept while the window is closed).
+pub fn set_update_status(text: &str, busy: bool) {
+    UPDATE_STATUS.with(|s| *s.borrow_mut() = (text.to_string(), busy));
+    if hwnd().is_some() {
+        ui::set_text(ctl(UPD_STATUS), text);
+        unsafe {
+            let _ = EnableWindow(ctl(UPD_CHECK), !busy);
+        }
+    }
 }
 
 pub fn close() {
@@ -656,14 +690,14 @@ fn build() {
         let about = format!(
             "Berth {}\nA lightweight, Mac-style dock for Windows 11.\n\n\
              Free and open source under the MIT License.\n\n\
-             Privacy: Berth has no accounts, ads, telemetry or cloud features and never \
-             connects to the internet. Your settings and a small troubleshooting log stay on \
-             this PC in:\n{}",
+             Privacy: Berth has no accounts, ads, telemetry or cloud features. It only goes \
+             online to check GitHub for updates, and only when you ask (see Updates). Your \
+             settings and a small troubleshooting log stay on this PC in:\n{}",
             crate::VERSION,
             util::data_dir().display()
         );
         add(
-            Some(4),
+            Some(ABOUT_PAGE),
             "STATIC",
             &about,
             c::SS_NOPREFIX,
@@ -674,17 +708,74 @@ fn build() {
         );
         button(
             &mut add,
-            4,
+            ABOUT_PAGE,
             (X0, 296, 190, 30),
             WEBSITE,
             "Open project page",
         );
         button(
             &mut add,
-            4,
+            ABOUT_PAGE,
             (X0 + 200, 296, 150, 30),
             LOGS,
             "Open log folder",
+        );
+
+        // Updates.
+        let u = UPDATES_PAGE;
+        add(
+            Some(u),
+            "STATIC",
+            &format!("Installed version: Berth {}", crate::VERSION),
+            c::SS_NOPREFIX,
+            0,
+            (X0, 68, 496, 22),
+            UPD_VERSION,
+            font,
+        );
+        button(
+            &mut add,
+            u,
+            (X0, 102, 250, 34),
+            UPD_CHECK,
+            "Check for updates and install",
+        );
+        add(
+            Some(u),
+            "STATIC",
+            "",
+            c::SS_NOPREFIX,
+            0,
+            (X0, 146, 496, 40),
+            UPD_STATUS,
+            font,
+        );
+        check(
+            &mut add,
+            u,
+            196,
+            UPD_AUTO,
+            "Check for updates automatically when Berth starts",
+        );
+        note(
+            &mut add,
+            u,
+            230,
+            150,
+            UPD_NOTE,
+            "Updates come only from the official releases of this project on GitHub \
+             (github.com/tahminbinmoin/berth). Berth connects to GitHub only when you press the \
+             button above, or at start-up if you tick the box. Nothing about you or your PC is sent.\n\n\
+             Every download is checked against its published SHA-256 checksum before it is \
+             installed. Berth then replaces its own program file and restarts. Your settings, \
+             pinned apps and startup choice are kept.",
+        );
+        button(
+            &mut add,
+            u,
+            (X0, 392, 190, 30),
+            UPD_RELEASES,
+            "View releases on GitHub",
         );
     }
 
@@ -866,6 +957,14 @@ fn load_values() {
     set_check(RUNAPPS, s.show_running_apps);
     set_check(AUTOHIDE, s.auto_hide);
     set_check(FULLSCREEN, s.hide_in_fullscreen);
+    set_check(UPD_AUTO, s.check_updates_on_startup);
+    UPDATE_STATUS.with(|st| {
+        let (text, busy) = st.borrow().clone();
+        ui::set_text(ctl(UPD_STATUS), &text);
+        unsafe {
+            let _ = EnableWindow(ctl(UPD_CHECK), !busy);
+        }
+    });
 
     // Apps.
     let changed = with_dash(|d| d.items != s.items).unwrap_or(false);
@@ -1046,6 +1145,14 @@ fn on_command(id: u16, code: u16) {
         (AUTOHIDE, c::BN_CLICKED) => {
             let v = get_check(AUTOHIDE);
             change(|s| s.auto_hide = v);
+        }
+        (UPD_AUTO, c::BN_CLICKED) => {
+            let v = get_check(UPD_AUTO);
+            change(|s| s.check_updates_on_startup = v);
+        }
+        (UPD_CHECK, c::BN_CLICKED) => crate::check_for_updates(),
+        (UPD_RELEASES, c::BN_CLICKED) => {
+            let _ = crate::apps::launch(&format!("{}/releases", crate::REPO_URL));
         }
         (FULLSCREEN, c::BN_CLICKED) => {
             let v = get_check(FULLSCREEN);

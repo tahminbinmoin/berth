@@ -4,7 +4,7 @@
 
 <h1 align="center">Berth</h1>
 
-<p align="center">A lightweight, Mac-style dock for Windows 11. Free, open source, and fully offline.</p>
+<p align="center">A lightweight, Mac-style dock for Windows 11. Free, open source, and offline unless you check for updates.</p>
 
 ---
 
@@ -43,7 +43,10 @@ dashboard.
   dashboard. Berth can start automatically when you sign in to Windows; you choose this on
   first launch and can change it at any time.
 - **Berth Dashboard:** one window for every setting (General, Appearance, Behavior, Apps,
-  About). Changes apply instantly and are saved automatically.
+  Updates, About). Changes apply instantly and are saved automatically.
+- **One-click updates:** Dashboard > Updates > **Check for updates and install** downloads
+  the latest release from this repository, verifies its checksum, and restarts Berth on
+  the new version. Your settings are kept.
 
 <p>
   <img src="docs/dashboard-appearance.png" width="49%" alt="Berth Dashboard, Appearance page">
@@ -63,18 +66,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.1 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.1.2 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.1-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.1-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.1.2-windows-x64.zip`**. Optionally also download
+   **`Berth-0.1.2-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.1-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.1.2-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -141,6 +144,28 @@ was.
 
 ## Upgrade
 
+### Automatic (Berth 0.1.2 and later)
+
+Open the dashboard, go to **Updates**, and click **Check for updates and install**. If a
+newer release exists, Berth asks once, then:
+
+1. downloads the release zip and its `.sha256` file from this repository's Releases page,
+2. checks the zip against the published SHA-256 checksum (a mismatch stops the update),
+3. replaces its own `Berth.exe` (the previous file is kept briefly as `Berth.exe.old`), and
+4. restarts on the new version. Your settings, pinned apps and startup choice are kept.
+
+You can also choose **Check for updates…** from the tray menu, or tick **Check for updates
+automatically when Berth starts** to get a notification when a new version is out (Berth
+still asks before installing anything). The automatic check is off unless you turn it on.
+
+If Berth's folder isn't writable (for example `C:\Program Files`), it can't replace itself
+and will say so. Move Berth to a folder in your user profile, or update manually.
+
+> **Upgrading from 0.1.0 or 0.1.1:** those versions don't have the updater yet, so update
+> to 0.1.2 manually once (below). After that, updates are one click.
+
+### Manual
+
 1. Quit Berth (tray icon > **Quit Berth**).
 2. Download and extract the new release as in [Install](#install).
 3. Replace the old `Berth.exe` with the new one (same folder), then start it.
@@ -172,14 +197,22 @@ Berth doesn't install anything else, write to system folders, or change system f
 | The dock covers part of my windows | Use auto-hide, move the dock to another edge, or increase **Distance from screen edge**. |
 | Settings look wrong or the dock misbehaves | **Dashboard > General > Restore default settings…** keeps your pinned apps. To start completely fresh, quit Berth and run `Berth.exe --reset-settings`. Your old settings file is kept as a backup. |
 | Berth says its settings couldn't be read | Berth moved the unreadable file aside (named `settings.broken-<time>.json`) and started with defaults. Nothing else is needed. |
+| "Couldn't check for updates" | Check your internet connection and try again later. GitHub limits how often a network can query it without signing in, so very frequent checks can be refused for a while. You can always update manually from the Releases page. |
+| "Berth can't replace its own file" | Berth is in a folder you can't write to (such as Program Files). Quit Berth, move the folder somewhere in your user profile, start it from there, then update. |
 | Launch at sign-in doesn't work | Check **Windows Settings > Apps > Startup** and make sure **Berth** is switched on. If you moved `Berth.exe`, start it once from its new location. |
 | Something else | Open **Dashboard > About > Open log folder** and look at `berth.log`. Please include it (after checking it for anything private) when you [open an issue](https://github.com/tahminbinmoin/berth/issues). |
 
 ## Privacy and network behavior
 
-- Berth **never connects to the network**. It has no update checker, telemetry, analytics,
-  crash reporting, accounts or ads. The only time anything opens a web page is when you
-  click **Open project page** on the About page, which opens your browser.
+- Berth has no telemetry, analytics, crash reporting, accounts or ads.
+- Berth **only connects to the internet to check for updates**, and only when you click
+  **Check for updates and install** (or **Check for updates…** in the tray menu), or at
+  start-up if you turned on the automatic check (off by default). It then contacts only
+  GitHub: `api.github.com` to read the latest release of `tahminbinmoin/berth`, and
+  `github.com` (which hands the download to GitHub's file servers) to download that
+  release. The request includes a `Berth/<version>` user agent and nothing about you or
+  your files. Berth only downloads files from this repository's release downloads.
+- **Open project page** and **View releases on GitHub** open your web browser.
 - Settings and pinned apps are saved in `%LOCALAPPDATA%\Berth\settings.json`.
   A small troubleshooting log (`berth.log`, limited to about 0.5 MB) is kept in the same
   folder. It records start-up, errors and the paths of apps that failed to open.
@@ -193,11 +226,15 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.1 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.1.2 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
 - **Not code-signed**, so SmartScreen warns on first run and Smart App Control may block it.
+- **About the updater's checks:** the SHA-256 checksum comes from the same GitHub release
+  as the download. It protects against corrupted or incomplete downloads, but it can't
+  prove who built the file the way a code signature would. Updates install without a new
+  SmartScreen prompt, just as with other apps that update themselves.
 - **No background blur.** The panel is translucent with a soft sheen and shadow, but it
   doesn't blur what's behind it. Windows only offers documented acrylic blur for
   ordinary windows, not for the per-pixel transparent window a dock needs, and Berth

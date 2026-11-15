@@ -23,6 +23,7 @@ mod system;
 mod text;
 mod tray;
 mod ui;
+mod updater;
 mod util;
 
 use std::cell::RefCell;
@@ -61,6 +62,7 @@ pub const WM_APP_TRAY: u32 = WM_APP + 1;
 pub const WM_APP_SHOW_SETTINGS: u32 = WM_APP + 2;
 pub const WM_APP_RELAYOUT: u32 = WM_APP + 3;
 pub const WM_APP_ACTION: u32 = WM_APP + 4;
+pub const WM_APP_UPDATE: u32 = WM_APP + 5;
 
 const TIMER_SAVE: usize = 10;
 const TIMER_RELAYOUT: usize = 11;
@@ -133,6 +135,7 @@ pub enum Action {
     ToggleAutostart,
     RestoreDefaults,
     OpenDataFolder,
+    CheckUpdates,
     About,
     Quit,
 }
@@ -152,6 +155,7 @@ const ID_RESTORE: u32 = 14;
 const ID_DATAFOLDER: u32 = 15;
 const ID_ABOUT: u32 = 16;
 const ID_QUIT: u32 = 17;
+const ID_UPDATE: u32 = 18;
 
 unsafe fn append(menu: HMENU, id: u32, text: &str, flags: MENU_ITEM_FLAGS) {
     let _ = AppendMenuW(menu, MF_STRING | flags, id as usize, &HSTRING::from(text));
@@ -326,6 +330,12 @@ fn show_tray_menu(x: i32, y: i32) {
             let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Troubleshooting"));
         }
         separator(menu);
+        append(
+            menu,
+            ID_UPDATE,
+            "Check for updates\u{2026}",
+            MENU_ITEM_FLAGS(0),
+        );
         append(menu, ID_ABOUT, "About Berth", MENU_ITEM_FLAGS(0));
         append(menu, ID_QUIT, "Quit Berth", MENU_ITEM_FLAGS(0));
         let cmd = track_menu(menu, x, y);
@@ -336,6 +346,7 @@ fn show_tray_menu(x: i32, y: i32) {
             ID_AUTOSTART => Some(Action::ToggleAutostart),
             ID_RESTORE => Some(Action::RestoreDefaults),
             ID_DATAFOLDER => Some(Action::OpenDataFolder),
+            ID_UPDATE => Some(Action::CheckUpdates),
             ID_ABOUT => Some(Action::About),
             ID_QUIT => Some(Action::Quit),
             _ => None,
@@ -403,12 +414,13 @@ pub fn perform(action: Action) {
             let dir = util::data_dir();
             let _ = apps::launch(&dir.to_string_lossy());
         }
+        Action::CheckUpdates => check_for_updates(),
         Action::About => info_box(
             None,
             &format!(
                 "Berth {VERSION}\nA lightweight dock for Windows 11.\n\n\
                  Free and open source under the MIT License.\n{REPO_URL}\n\n\
-                 Berth sends no data anywhere. Settings and the log are stored in:\n{}",
+                 Berth only goes online when you check for updates. Settings and the log are stored in:\n{}",
                 util::data_dir().display()
             ),
         ),
@@ -503,6 +515,121 @@ pub fn restore_defaults(owner: Option<HWND>) {
     dashboard::refresh();
 }
 
+/// "Check for updates" from the dashboard or tray: check, then offer to
+/// download and install.
+pub fn check_for_updates() {
+    dashboard::open_page(dashboard::UPDATES_PAGE);
+    let Some(ctl) = controller() else { return };
+    if updater::start_check(ctl, WM_APP_UPDATE, false) {
+        dashboard::set_update_status("Checking for updates\u{2026}", true);
+    }
+}
+
+fn handle_update_outcome() {
+    let Some(outcome) = updater::take_outcome() else {
+        return;
+    };
+    let owner = dashboard::window();
+    match outcome {
+        updater::Outcome::Checked { silent, result } => match result {
+            Err(e) => {
+                if !silent {
+                    dashboard::set_update_status(
+                        &format!("Couldn't check for updates: {e}."),
+                        false,
+                    );
+                }
+            }
+            Ok(None) => {
+                if !silent {
+                    dashboard::set_update_status(
+                        &format!("You're up to date. Berth {VERSION} is the latest version."),
+                        false,
+                    );
+                }
+            }
+            Ok(Some(r)) => {
+                dashboard::set_update_status(&format!("Berth {} is available.", r.version), false);
+                if silent {
+                    with_app(|a| {
+                        a.tray.notify(
+                            &format!("Berth {} is available", r.version),
+                            "Click here, then choose \u{201c}Check for updates and install\u{201d}.",
+                        )
+                    });
+                    return;
+                }
+                let ok = util::ask_box(
+                    owner,
+                    &format!(
+                        "Berth {} is available (you have {VERSION}).\n\nDownload and install it now? Berth will \
+                         restart by itself. Your settings and pinned apps are kept.",
+                        r.version
+                    ),
+                );
+                if ok {
+                    if let Some(ctl) = controller() {
+                        if updater::start_download(r.clone(), ctl, WM_APP_UPDATE) {
+                            dashboard::set_update_status(
+                                &format!("Downloading Berth {}\u{2026}", r.version),
+                                true,
+                            );
+                        }
+                    }
+                }
+            }
+        },
+        updater::Outcome::Prepared(Err(e)) => {
+            dashboard::set_update_status(&format!("The update couldn't be downloaded: {e}"), false);
+            error_box(
+                owner,
+                &format!("Berth couldn't download the update.\n\n{e}"),
+            );
+        }
+        updater::Outcome::Prepared(Ok((release, new_exe))) => {
+            dashboard::set_update_status(
+                &format!("Installing Berth {}\u{2026}", release.version),
+                true,
+            );
+            match updater::install(&new_exe) {
+                Err(e) => {
+                    dashboard::set_update_status("The update couldn't be installed.", false);
+                    error_box(owner, &format!("Berth couldn't install the update.\n\n{e}"));
+                }
+                Ok(exe) => {
+                    with_app(|a| {
+                        a.save_pending = a.persist;
+                        let _ = a.save_now();
+                    });
+                    // Let the new version start even before this one has exited.
+                    release_single_instance();
+                    let started = std::process::Command::new(&exe)
+                        .arg("--after-update")
+                        .arg(std::process::id().to_string())
+                        .spawn();
+                    match started {
+                        Ok(_) => {
+                            log(&format!("updated to {}; restarting", release.version));
+                            quit();
+                        }
+                        Err(e) => {
+                            updater::rollback(&exe);
+                            dashboard::set_update_status(
+                                "The update couldn't be started, so it was undone.",
+                                false,
+                            );
+                            error_box(
+                                owner,
+                                &format!("The new version couldn't be started ({e}). Berth was left unchanged."),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn quit() {
     with_app(|a| {
         let _ = a.save_now();
@@ -552,6 +679,20 @@ pub fn add_items(items: Vec<PinnedItem>, index: Option<usize>) -> usize {
 
 static mut TASKBAR_CREATED: u32 = 0;
 
+/// The single-instance mutex, released early when restarting after an update.
+static SINGLE_INSTANCE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+
+fn release_single_instance() {
+    let h = SINGLE_INSTANCE.swap(0, std::sync::atomic::Ordering::Relaxed);
+    if h != 0 {
+        unsafe {
+            let m = windows::Win32::Foundation::HANDLE(h as *mut _);
+            let _ = windows::Win32::System::Threading::ReleaseMutex(m);
+            let _ = windows::Win32::Foundation::CloseHandle(m);
+        }
+    }
+}
+
 unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     match msg {
         WM_APP_TRAY => {
@@ -560,6 +701,8 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                 WM_CONTEXTMENU => show_tray_menu(util::get_x_wparam(wp), util::get_y_wparam(wp)),
                 // NIN_SELECT / NIN_KEYSELECT (left click or Enter on the icon)
                 0x0400 | 0x0401 => dashboard::open(),
+                // NIN_BALLOONUSERCLICK: the update notification was clicked
+                0x0405 => dashboard::open_page(dashboard::UPDATES_PAGE),
                 _ => {}
             }
             LRESULT(0)
@@ -570,6 +713,10 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                 a.dock.reveal();
             });
             dashboard::open();
+            LRESULT(0)
+        }
+        WM_APP_UPDATE => {
+            handle_update_outcome();
             LRESULT(0)
         }
         WM_APP_RELAYOUT => {
@@ -730,6 +877,7 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
 struct Args {
     #[allow(dead_code)]
     startup: bool,
+    after_update: Option<u32>,
     reset: bool,
     self_test: Option<String>,
     preview: Option<String>,
@@ -739,6 +887,7 @@ struct Args {
 fn parse_args() -> Args {
     let mut a = Args {
         startup: false,
+        after_update: None,
         reset: false,
         self_test: None,
         preview: None,
@@ -749,6 +898,7 @@ fn parse_args() -> Args {
         match arg.to_ascii_lowercase().as_str() {
             "--startup" => a.startup = true,
             "--reset-settings" => a.reset = true,
+            "--after-update" => a.after_update = it.next().and_then(|p| p.parse().ok()),
             "--self-test" => {
                 a.self_test = Some(it.next().unwrap_or_else(|| "berth-self-test.txt".into()))
             }
@@ -842,10 +992,18 @@ fn main() {
         None => log("could not read the Windows build number; continuing"),
     }
 
+    // After a self-update, let the previous version finish exiting first.
+    if let Some(pid) = args.after_update {
+        updater::wait_for_previous(pid);
+    }
+
     // One dock per user session; a second launch opens the settings window.
     if !testing {
         unsafe {
-            let _ = CreateMutexW(None, true, w!("Local\\Berth.Dock.SingleInstance"));
+            let m = CreateMutexW(None, true, w!("Local\\Berth.Dock.SingleInstance"));
+            if let Ok(h) = m {
+                SINGLE_INSTANCE.store(h.0 as isize, std::sync::atomic::Ordering::Relaxed);
+            }
             if windows::Win32::Foundation::GetLastError()
                 == windows::Win32::Foundation::ERROR_ALREADY_EXISTS
             {
@@ -1018,6 +1176,21 @@ fn main() {
         }
     });
     autostart::refresh_path_if_enabled();
+    std::thread::spawn(updater::cleanup);
+    if args.after_update.is_some() {
+        log(&format!("now running Berth {VERSION} after an update"));
+        with_app(|a| {
+            a.tray.notify(
+                &format!("Berth updated to {VERSION}"),
+                "Your settings and pinned apps were kept.",
+            )
+        });
+    } else if with_app(|a| a.settings.check_updates_on_startup) == Some(true) {
+        {
+            let ctl = controller;
+            updater::start_check(ctl, WM_APP_UPDATE, true);
+        }
+    }
     if let Some(n) = notice {
         util::warn_box(None, &n);
     }

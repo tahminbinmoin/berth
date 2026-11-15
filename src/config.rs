@@ -78,6 +78,8 @@ pub struct Settings {
     pub show_running_apps: bool,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
+    /// Opt-in: look for a new release on GitHub when Berth starts.
+    pub check_updates_on_startup: bool,
     pub items: Vec<PinnedItem>,
 }
 
@@ -99,6 +101,7 @@ impl Default for Settings {
             show_running_apps: false,
             auto_hide: false,
             hide_in_fullscreen: true,
+            check_updates_on_startup: false,
             items: Vec::new(),
         }
     }
