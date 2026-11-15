@@ -1,0 +1,25 @@
+# Rust / Cargo build output
+/target/
+**/*.rs.bk
+*.pdb
+
+# Packaging output
+/dist/
+
+# Local test output
+berth-self-test.txt
+*.png.tmp
+
+# Editors and OS clutter
+.vs/
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Python helper caches
+__pycache__/
+*.pyc

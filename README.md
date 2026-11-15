@@ -1,0 +1,282 @@
+<p align="center">
+  <img src="assets/berth-logo.png" width="96" height="96" alt="Berth icon">
+</p>
+
+<h1 align="center">Berth</h1>
+
+<p align="center">A lightweight, Mac-style dock for Windows 11. Free, open source, and fully offline.</p>
+
+---
+
+Berth adds a clean, centered row of app icons near the edge of your screen, with a soft
+translucent panel, smooth hover magnification and dots under the apps that are running. It
+sits next to the Windows taskbar instead of replacing it, and you control all of it from a
+dashboard.
+
+![Berth dock, light theme](docs/dock-light.png)
+![Berth dock, dark theme](docs/dock-dark.png)
+
+> **About these screenshots:** they were captured during development under Wine on Linux, so
+> the icons are Wine's stand-ins for system tools. On Windows 11 the dock shows your apps'
+> real icons. A screenshot from a Windows 11 PC will replace these once one is available.
+
+## Features
+
+- **Dock:** a centered row of icons that stays above normal windows, on the bottom, left
+  or right edge of the screen you choose.
+- **Pin and launch apps:** add apps from a list of everything in Start > All apps
+  (including Microsoft Store apps), browse for any program, shortcut, file or folder, or
+  drag files onto the dock. Drag icons to reorder them.
+- **Running indicators:** a dot under apps that have windows open. Clicking a running app
+  brings its window forward. Clicking it again cycles through its windows or minimizes
+  it, just like the taskbar.
+- **Hover effects:** Mac-style magnification, a gentle lift, or a simple highlight, plus
+  a name label. All animation can be turned off, and by default Berth follows the
+  Windows "Animation effects" setting.
+- **Looks:** light and dark themes (or match Windows), adjustable icon size, spacing,
+  distance from the edge, and background opacity.
+- **Multi-monitor:** choose which display shows the dock. If that display is
+  disconnected, the dock moves to your main display.
+- **Behavior options:** auto-hide, hide while an app is full screen, and optionally show
+  running apps that aren't pinned.
+- **Runs in the background:** an icon in the notification area (near the clock) opens the
+  dashboard. Berth can start automatically when you sign in to Windows; you choose this on
+  first launch and can change it at any time.
+- **Berth Dashboard:** one window for every setting (General, Appearance, Behavior, Apps,
+  About). Changes apply instantly and are saved automatically.
+
+<p>
+  <img src="docs/dashboard-appearance.png" width="49%" alt="Berth Dashboard, Appearance page">
+  <img src="docs/dashboard-apps.png" width="49%" alt="Berth Dashboard, Apps page">
+</p>
+
+Berth has no accounts, ads, telemetry, subscriptions or cloud features, and it never needs
+administrator rights.
+
+## Requirements
+
+- Windows 11 (build 22000 or later), 64-bit. Berth checks the version when it starts and
+  will not run on Windows 10.
+- Nothing else to install. Berth is a single ~1 MB program with no runtime dependencies.
+- Windows 11 on Arm PCs run the x64 build through Windows' built-in emulation. There is no
+  native Arm64 build yet.
+
+## Install
+
+Berth 0.1.0 is distributed as a portable zip file. There is no installer yet, and the
+program is **not code-signed** (signing certificates cost money; see
+[Limitations](#current-limitations-and-known-issues)).
+
+1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
+   under **Assets**, download **`Berth-0.1.0-windows-x64.zip`**. Optionally also download
+   **`Berth-0.1.0-windows-x64.zip.sha256`**.
+2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
+   folder and run:
+
+   ```powershell
+   Get-FileHash .\Berth-0.1.0-windows-x64.zip -Algorithm SHA256
+   ```
+
+   The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
+   and download it again.
+3. Right-click the zip, choose **Extract All…**, and extract it to a folder you will keep,
+   for example `C:\Users\<you>\Apps\Berth`. Don't run Berth from inside the zip, and don't
+   leave it in Downloads if you clean that folder out, because launch at sign-in points to
+   wherever `Berth.exe` lives.
+4. Open the extracted folder and double-click **`Berth.exe`**.
+5. **If Windows shows "Windows protected your PC" (Microsoft Defender SmartScreen):** this
+   appears because the file is new and not signed, so Windows can't vouch for its
+   publisher. It will say "Unknown publisher". Only continue if you downloaded the file from
+   this repository's Releases page and the checksum matched. To continue, select **More
+   info**, check that the app name is `Berth.exe`, then select **Run anyway**. If you'd
+   rather not, close the prompt and [build Berth from source](#build-from-source) instead.
+   Please don't turn off SmartScreen or Microsoft Defender to run Berth.
+   - If **Smart App Control** is on, Windows may block Berth with no option to run it. In
+     that case Berth can't run on that PC until a signed release is available. Don't
+     turn off Smart App Control just for Berth.
+6. The dock appears and the **Berth Dashboard** opens. Berth asks whether it should **start
+   automatically when you sign in**. Choose **Yes** to have it run in the background every
+   time you turn on your PC, or **No** to start it yourself.
+
+### Starting with Windows (and turning it off)
+
+Launch at sign-in is always your choice and is off unless you turn it on. You can change it
+in any of these places:
+
+- **Dashboard > General >** "Start Berth automatically when I sign in to Windows".
+- **Tray icon > right-click >** "Launch at sign-in".
+- **Windows Settings > Apps > Startup**, switch "Berth" off. Berth respects this switch and
+  will tell you if Windows is blocking it.
+
+Technically, Berth adds a value named `Berth` under
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run`. It only writes this value
+when you turn the option on, and removes it when you turn it off. No administrator rights
+are needed.
+
+## Using Berth
+
+- **Open an app:** click its icon. Shift+click or middle-click opens a new window.
+- **Right-click an icon** to show its windows, open a new window, open its file location,
+  remove it from the dock, or keep a running app in the dock.
+- **Right-click the dock background** (or left-click the tray icon) to open the
+  dashboard, add an app, hide the dock, or quit.
+- **Add apps:** Dashboard > Apps > **Add app…** (lists everything in Start > All apps),
+  **Add file…**, **Add folder…**, or drag files, folders and shortcuts onto the dock.
+- **Reorder:** drag icons along the dock, or use **Move up / Move down** in the
+  dashboard. **Rename** changes the label shown on hover.
+- **Open the dashboard:** left-click the tray icon, choose **Open Dashboard…** from any
+  Berth menu, or simply run `Berth.exe` again while Berth is already running.
+
+### The Windows taskbar stays available
+
+Berth never hides, moves or changes the Windows taskbar, and never changes any taskbar
+setting. If the dock overlaps something you need, move it to another edge, turn on
+auto-hide, or hide it from the tray menu.
+
+**To quit Berth:** right-click the Berth icon in the notification area (you may need to
+click the **^** arrow next to the clock) and choose **Quit Berth**. You can also use
+**Dashboard > General > Quit Berth**, or right-click an empty part of the dock and choose
+**Quit Berth**. Quitting removes the dock immediately and leaves the taskbar exactly as it
+was.
+
+## Upgrade
+
+1. Quit Berth (tray icon > **Quit Berth**).
+2. Download and extract the new release as in [Install](#install).
+3. Replace the old `Berth.exe` with the new one (same folder), then start it.
+
+Your settings and pinned apps are kept, because they're stored separately in
+`%LOCALAPPDATA%\Berth`. If you put the new version in a different folder, start it once
+from there and the launch-at-sign-in entry will follow it automatically.
+
+## Uninstall
+
+1. Turn off launch at sign-in: **Dashboard > General**, untick "Start Berth automatically…".
+   (Or run `Berth.exe --remove-startup` from the Berth folder, which removes the entry and exits.)
+2. Quit Berth (tray icon > **Quit Berth**).
+3. Delete the folder that contains `Berth.exe`.
+4. *(Optional)* Delete your settings and log: press **Win+R**, enter `%LOCALAPPDATA%\Berth`,
+   and delete that folder.
+
+Berth doesn't install anything else, write to system folders, or change system files.
+
+## Troubleshooting
+
+| Problem | What to try |
+|---|---|
+| The dock isn't visible | Look for the Berth icon near the clock (click **^**). Open the dashboard and make sure **Show the dock** is ticked. Check **Display** (General page). If **Automatically hide the dock** is on, rest the pointer at the screen edge. The dock also hides while a full-screen app is in front. |
+| Nothing happens when I start Berth | It's probably already running: starting it again opens the dashboard. Check the notification area. |
+| An icon is faded and its label says "(not found)" | The app was moved or uninstalled. Remove it (Dashboard > Apps) and add it again. Clicking it also offers to remove it. |
+| No running dot for an app | Detection works for most apps but not all (see Limitations). The app still launches normally. |
+| Clicking a running app only flashes it on the taskbar | Windows sometimes blocks apps from switching windows. Click the flashing taskbar button, or click the dock icon again. |
+| The dock covers part of my windows | Use auto-hide, move the dock to another edge, or increase **Distance from screen edge**. |
+| Settings look wrong or the dock misbehaves | **Dashboard > General > Restore default settings…** keeps your pinned apps. To start completely fresh, quit Berth and run `Berth.exe --reset-settings`. Your old settings file is kept as a backup. |
+| Berth says its settings couldn't be read | Berth moved the unreadable file aside (named `settings.broken-<time>.json`) and started with defaults. Nothing else is needed. |
+| Launch at sign-in doesn't work | Check **Windows Settings > Apps > Startup** and make sure **Berth** is switched on. If you moved `Berth.exe`, start it once from its new location. |
+| Something else | Open **Dashboard > About > Open log folder** and look at `berth.log`. Please include it (after checking it for anything private) when you [open an issue](https://github.com/tahminbinmoin/berth/issues). |
+
+## Privacy and network behavior
+
+- Berth **never connects to the network**. It has no update checker, telemetry, analytics,
+  crash reporting, accounts or ads. The only time anything opens a web page is when you
+  click **Open project page** on the About page, which opens your browser.
+- Settings and pinned apps are saved in `%LOCALAPPDATA%\Berth\settings.json`.
+  A small troubleshooting log (`berth.log`, limited to about 0.5 MB) is kept in the same
+  folder. It records start-up, errors and the paths of apps that failed to open.
+- To show running indicators, Berth looks at the list of open windows and the program
+  each belongs to, the same information the taskbar uses. This stays in memory and is
+  never saved or sent anywhere.
+- The only registry change Berth makes is the optional launch-at-sign-in value described
+  above.
+
+## Current limitations and known issues
+
+This is the first release. Please read these before relying on it.
+
+- **Testing so far:** Berth 0.1.0 is built and automatically self-tested on Windows Server
+  2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
+  Wine during development. It has **not yet been tested by hand on a physical Windows 11
+  PC**. Expect rough edges, and please report them.
+- **Not code-signed**, so SmartScreen warns on first run and Smart App Control may block it.
+- **No background blur.** The panel is translucent with a soft sheen and shadow, but it
+  doesn't blur what's behind it. Windows only offers documented acrylic blur for
+  ordinary windows, not for the per-pixel transparent window a dock needs, and Berth
+  avoids undocumented APIs.
+- **Running indicators are best-effort.** Berth matches open windows to pinned items by
+  program path and app ID. Apps started through a launcher (some games, Java apps,
+  some installers' "stub" executables) may not get a dot, and minimized Store apps may
+  briefly lose theirs.
+- **The dock doesn't reserve screen space.** Maximized windows extend underneath it. Use
+  auto-hide or another edge if that's a problem.
+- **Auto-hide on the taskbar's edge:** with the taskbar at the bottom and always visible,
+  revealing a bottom dock means resting the pointer at the very bottom edge (on the
+  taskbar) for a moment.
+- **One dock, one display** at a time. Top-edge placement isn't offered.
+- The dashboard uses standard Windows controls in a light style, even when Windows is in
+  dark mode. The dock itself follows the dark theme.
+- Dragging items directly from the Start menu onto the dock isn't supported. Use
+  **Add app…** instead.
+- Windows won't let Berth receive files dragged from apps running as administrator.
+
+## Build from source
+
+You need Windows 11 with:
+
+1. **Rust** (stable, 1.85 or newer) from <https://rustup.rs>. Use the default
+   `x86_64-pc-windows-msvc` toolchain.
+2. **Visual Studio Build Tools** with the **Desktop development with C++** workload (it
+   provides the MSVC linker and the Windows SDK). The free Build Tools edition is enough.
+
+Then, in a terminal:
+
+```powershell
+git clone https://github.com/tahminbinmoin/berth.git
+cd berth
+cargo build --release
+.\target\release\Berth.exe
+```
+
+Other useful commands:
+
+```powershell
+cargo test                                   # unit tests
+.\target\release\Berth.exe --self-test report.txt          # start-up checks (writes a report)
+.\target\release\Berth.exe --render-preview dock.png --dark  # render the dock to an image
+powershell -ExecutionPolicy Bypass -File tools\package.ps1   # build the release zip + checksum in .\dist
+```
+
+The `-ExecutionPolicy Bypass` switch only applies to that single script run. It doesn't
+change your system's PowerShell policy.
+
+Releases are built by GitHub Actions ([`.github/workflows/build.yml`](.github/workflows/build.yml)):
+every push is built, tested and self-tested on Windows, and pushing a `v*` tag publishes
+the zip and its SHA-256 checksum to GitHub Releases. See [CONTRIBUTING.md](CONTRIBUTING.md)
+for the code layout and for cross-compiling from Linux.
+
+### How it's built
+
+Berth is written in Rust and uses Microsoft's official
+[`windows`](https://github.com/microsoft/windows-rs) crate to call Win32 directly. There's
+no browser engine and no .NET runtime. The dock is a top-most layered window
+(`WS_EX_LAYERED` with per-pixel alpha, `WS_EX_NOACTIVATE`, `WS_EX_TOOLWINDOW`) drawn with
+[tiny-skia](https://github.com/RazrFalcon/tiny-skia). Icons come from the Windows Shell
+(`IShellItemImageFactory`, with the system image list as a fallback). App lists come from
+the `shell:AppsFolder` virtual folder. The dashboard uses standard Common Controls and is
+per-monitor DPI aware.
+
+## Contributing
+
+Bug reports, ideas and pull requests are welcome. Please read
+[CONTRIBUTING.md](CONTRIBUTING.md) first. In short: keep Berth small, offline and honest
+about what it supports, and test your changes on Windows 11.
+
+## License and attribution
+
+Berth is released under the [MIT License](LICENSE) (chosen as a permissive default for an
+open-source desktop app). Third-party crates compiled into Berth, and their licenses, are
+listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+
+Berth was inspired by the general idea of clean, customizable desktop docks, including
+[LumaBar](https://lumabar.xyz/). It's an independent project with its own name, design,
+icon and code, and it isn't affiliated with LumaBar, Apple or Microsoft. Windows is a
+trademark of Microsoft Corporation.

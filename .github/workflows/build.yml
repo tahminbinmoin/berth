@@ -1,0 +1,83 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Windows Server 2025 shares the Windows 11 24H2 code base (build 26100),
+    # so Berth's Windows 11 check passes and the self-test can run.
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          rustc --version
+          cargo --version
+
+      - name: Unit tests
+        run: cargo test --locked
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Self-test (creates the dock, renders a frame, exits)
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--self-test', "$PWD\self-test.txt" -Wait -PassThru
+          Get-Content self-test.txt
+          if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
+
+      - name: Render preview image
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-preview', "$PWD\preview.png" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "preview failed" }
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
+          $name = "Berth-$version-windows-x64"
+          New-Item -ItemType Directory -Force dist\$name | Out-Null
+          Copy-Item target\release\Berth.exe, README.md, LICENSE, THIRD_PARTY_NOTICES.md dist\$name
+          Compress-Archive -Path dist\$name\* -DestinationPath dist\$name.zip
+          $hash = (Get-FileHash -Algorithm SHA256 dist\$name.zip).Hash.ToLower()
+          "$hash  $name.zip" | Out-File -Encoding ascii dist\$name.zip.sha256
+          Get-Content dist\$name.zip.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: berth-windows-x64
+          path: |
+            dist/*.zip
+            dist/*.sha256
+            self-test.txt
+            preview.png
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: berth-windows-x64
+          path: artifacts
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" artifacts/dist/*.zip artifacts/dist/*.sha256 \
+            --repo "$GITHUB_REPOSITORY" --title "Berth $GITHUB_REF_NAME" \
+            --notes "See the README for installation steps. This build is not code-signed; verify the SHA-256 checksum before running it."

@@ -1,0 +1,9 @@
+# Cross-compiling from Linux uses the MinGW-w64 linker. Native Windows (MSVC)
+# builds ignore this section.
+[target.x86_64-pc-windows-gnu]
+linker = "x86_64-w64-mingw32-gcc"
+
+# Link the C runtime statically on MSVC so Berth.exe runs without the
+# Visual C++ Redistributable.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
