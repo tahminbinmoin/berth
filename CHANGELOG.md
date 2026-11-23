@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 — 2026-11-24
+
+- **New:** optional **Hide the Windows taskbar automatically while Berth is running**
+  (Dashboard > General). Berth turns on Windows' own taskbar auto-hide, so the taskbar
+  slides back in when the pointer reaches its edge (top, bottom, left or right), and puts
+  your previous setting back when you turn the option off, quit Berth, or sign out.
+- **New:** update notifications. Berth checks GitHub at start-up and about twice a day
+  and shows a notification when a new version is out. On by default; turn it off in
+  Dashboard > Updates. Installing still always asks first.
+- After an update, a notification says what's new.
+
 ## 0.1.2 — 2026-11-15
 
 - **New:** one-click updates. Dashboard > **Updates** > **Check for updates and install**

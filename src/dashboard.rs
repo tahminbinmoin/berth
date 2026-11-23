@@ -55,6 +55,8 @@ const RESTORE: u16 = 205;
 const OPENFOLDER: u16 = 206;
 const QUIT: u16 = 207;
 const BG_NOTE: u16 = 208;
+const TASKBAR: u16 = 209;
+const TASKBAR_NOTE: u16 = 210;
 const THEME: u16 = 300;
 const SIZE: u16 = 301;
 const SIZE_V: u16 = 302;
@@ -93,7 +95,8 @@ const UPD_NOTE: u16 = 704;
 const UPD_RELEASES: u16 = 705;
 const TITLE_BASE: u16 = 900;
 
-const NOTES: [u16; 7] = [
+const NOTES: [u16; 8] = [
+    TASKBAR_NOTE,
     AUTOSTART_NOTE,
     BG_NOTE,
     BEHAVIOR_NOTE,
@@ -287,7 +290,8 @@ pub fn first_run_welcome() {
     let yes = util::ask_box(
         owner,
         "Welcome to Berth!\n\nStart Berth automatically in the background whenever you sign in to Windows?\n\n\
-         You can change this at any time on the General page of this dashboard, or in Windows Settings > Apps > Startup.",
+         You can change this at any time on the General page of this dashboard, or in Windows Settings > Apps > Startup.\n\n\
+         Berth will also let you know when a new version is out (Dashboard > Updates).",
     );
     if yes {
         if let Err(e) = autostart::enable() {
@@ -530,36 +534,51 @@ fn build() {
             "Start Berth automatically when I sign in to Windows",
         );
         note(&mut add, 0, 94, 40, AUTOSTART_NOTE, "");
-        check(&mut add, 0, 142, SHOWDOCK, "Show the dock");
-        label(&mut add, 0, 186, "Display");
-        combo(&mut add, 0, 184, DISPLAY, &[]);
-        label(&mut add, 0, 228, "Position on screen");
-        combo(&mut add, 0, 226, POSITION, &["Bottom", "Left", "Right"]);
+        check(&mut add, 0, 136, SHOWDOCK, "Show the dock");
+        check(
+            &mut add,
+            0,
+            166,
+            TASKBAR,
+            "Hide the Windows taskbar automatically while Berth is running",
+        );
         note(
             &mut add,
             0,
-            276,
-            60,
+            192,
+            36,
+            TASKBAR_NOTE,
+            "The taskbar slides back when you move the pointer to its edge. Your previous \
+             setting comes back when you turn this off or quit Berth.",
+        );
+        label(&mut add, 0, 240, "Display");
+        combo(&mut add, 0, 238, DISPLAY, &[]);
+        label(&mut add, 0, 282, "Position on screen");
+        combo(&mut add, 0, 280, POSITION, &["Bottom", "Left", "Right"]);
+        note(
+            &mut add,
+            0,
+            326,
+            44,
             BG_NOTE,
             "Berth runs quietly in the background and keeps an icon in the notification area \
-             (near the clock). Closing this window does not quit Berth. The Windows taskbar stays \
-             available at all times.",
+             (near the clock). Closing this window does not quit Berth.",
         );
         button(
             &mut add,
             0,
-            (X0, 352, 190, 30),
+            (X0, 384, 190, 30),
             RESTORE,
             "Restore default settings\u{2026}",
         );
         button(
             &mut add,
             0,
-            (X0 + 200, 352, 150, 30),
+            (X0 + 200, 384, 150, 30),
             OPENFOLDER,
             "Open settings folder",
         );
-        button(&mut add, 0, (X0, 392, 190, 30), QUIT, "Quit Berth");
+        button(&mut add, 0, (X0, 424, 190, 30), QUIT, "Quit Berth");
 
         // Appearance.
         label(&mut add, 1, 68, "Theme");
@@ -691,7 +710,7 @@ fn build() {
             "Berth {}\nA lightweight, Mac-style dock for Windows 11.\n\n\
              Free and open source under the MIT License.\n\n\
              Privacy: Berth has no accounts, ads, telemetry or cloud features. It only goes \
-             online to check GitHub for updates, and only when you ask (see Updates). Your \
+             online to check this project's GitHub releases for updates (see Updates). Your \
              settings and a small troubleshooting log stay on this PC in:\n{}",
             crate::VERSION,
             util::data_dir().display()
@@ -755,7 +774,7 @@ fn build() {
             u,
             196,
             UPD_AUTO,
-            "Check for updates automatically when Berth starts",
+            "Notify me when a new version is available",
         );
         note(
             &mut add,
@@ -765,7 +784,8 @@ fn build() {
             UPD_NOTE,
             "Updates come only from the official releases of this project on GitHub \
              (github.com/tahminbinmoin/berth). Berth connects to GitHub only when you press the \
-             button above, or at start-up if you tick the box. Nothing about you or your PC is sent.\n\n\
+             button above, or, if notifications are on, at start-up and twice a day to look for a \
+             new version. Nothing about you or your PC is sent.\n\n\
              Every download is checked against its published SHA-256 checksum before it is \
              installed. Berth then replaces its own program file and restarts. Your settings, \
              pinned apps and startup choice are kept.",
@@ -885,6 +905,7 @@ fn load_values() {
         },
     );
     set_check(SHOWDOCK, !hidden);
+    set_check(TASKBAR, s.hide_taskbar);
 
     let mons = system::monitors();
     let disp = ctl(DISPLAY);
@@ -1096,6 +1117,10 @@ fn on_command(id: u16, code: u16) {
                 );
             }
             notify_changed();
+        }
+        (TASKBAR, c::BN_CLICKED) => {
+            let v = get_check(TASKBAR);
+            change(|s| s.hide_taskbar = v);
         }
         (SHOWDOCK, c::BN_CLICKED) => {
             let show = get_check(SHOWDOCK);

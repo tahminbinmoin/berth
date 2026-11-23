@@ -10,8 +10,8 @@
 
 Berth adds a clean, centered row of app icons near the edge of your screen, with a soft
 translucent panel, smooth hover magnification and dots under the apps that are running. It
-sits next to the Windows taskbar instead of replacing it, and you control all of it from a
-dashboard.
+sits next to the Windows taskbar instead of replacing it (or, if you like, tucks the
+taskbar away until you need it), and you control all of it from a dashboard.
 
 ![Berth dock, light theme](docs/dock-light.png)
 ![Berth dock, dark theme](docs/dock-dark.png)
@@ -39,6 +39,10 @@ dashboard.
   disconnected, the dock moves to your main display.
 - **Behavior options:** auto-hide, hide while an app is full screen, and optionally show
   running apps that aren't pinned.
+- **Hide the Windows taskbar (optional):** Berth can turn on Windows' own taskbar
+  auto-hide while it runs. The taskbar slides back in whenever your pointer reaches its
+  edge, wherever it is, and your previous setting is restored when you turn this off or
+  quit Berth.
 - **Runs in the background:** an icon in the notification area (near the clock) opens the
   dashboard. Berth can start automatically when you sign in to Windows; you choose this on
   first launch and can change it at any time.
@@ -46,7 +50,8 @@ dashboard.
   Updates, About). Changes apply instantly and are saved automatically.
 - **One-click updates:** Dashboard > Updates > **Check for updates and install** downloads
   the latest release from this repository, verifies its checksum, and restarts Berth on
-  the new version. Your settings are kept.
+  the new version. Your settings are kept. Berth also shows a notification when a new
+  version is out (you can turn this off).
 
 <p>
   <img src="docs/dashboard-appearance.png" width="49%" alt="Berth Dashboard, Appearance page">
@@ -66,18 +71,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.2 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.1.3 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.2-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.2-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.1.3-windows-x64.zip`**. Optionally also download
+   **`Berth-0.1.3-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.2-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.1.3-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -130,17 +135,33 @@ are needed.
 - **Open the dashboard:** left-click the tray icon, choose **Open Dashboard…** from any
   Berth menu, or simply run `Berth.exe` again while Berth is already running.
 
-### The Windows taskbar stays available
+### The Windows taskbar
 
-Berth never hides, moves or changes the Windows taskbar, and never changes any taskbar
-setting. If the dock overlaps something you need, move it to another edge, turn on
-auto-hide, or hide it from the tray menu.
+By default Berth leaves the Windows taskbar alone. It doesn't hide, move or change it, or
+change any taskbar setting. If the dock overlaps something you need, move it to another
+edge, turn on auto-hide, or hide it from the tray menu.
+
+**Optional: hide the taskbar while Berth runs.** Tick **Dashboard > General > Hide the
+Windows taskbar automatically while Berth is running**. Berth then switches on Windows'
+own **Automatically hide the taskbar** setting (the same one as in Settings >
+Personalization > Taskbar > Taskbar behaviors). The taskbar slides back in whenever you
+move the pointer to its edge (top, bottom, left or right) on any display, and the
+**Start** key, **Win+T** and notifications work as usual.
+
+- Berth remembers whether auto-hide was already on and puts that back when you untick the
+  option or quit Berth. It also restores it when you sign out or shut down, and turns
+  it on again the next time Berth starts.
+- If Berth ever stops unexpectedly while this is on, the taskbar simply stays on
+  auto-hide (still usable). Start Berth again and quit it, or untick the option, to put
+  your setting back. You can always change it yourself in Windows Settings.
+- Berth uses the documented Windows shell API for this. It never hides the taskbar
+  window itself or modifies system files.
 
 **To quit Berth:** right-click the Berth icon in the notification area (you may need to
 click the **^** arrow next to the clock) and choose **Quit Berth**. You can also use
 **Dashboard > General > Quit Berth**, or right-click an empty part of the dock and choose
 **Quit Berth**. Quitting removes the dock immediately and leaves the taskbar exactly as it
-was.
+was before Berth started (including undoing the optional taskbar hiding).
 
 ## Upgrade
 
@@ -178,7 +199,8 @@ from there and the launch-at-sign-in entry will follow it automatically.
 
 1. Turn off launch at sign-in: **Dashboard > General**, untick "Start Berth automatically…".
    (Or run `Berth.exe --remove-startup` from the Berth folder, which removes the entry and exits.)
-2. Quit Berth (tray icon > **Quit Berth**).
+2. Quit Berth (tray icon > **Quit Berth**). If you used **Hide the Windows taskbar**, quitting
+   puts your taskbar setting back.
 3. Delete the folder that contains `Berth.exe`.
 4. *(Optional)* Delete your settings and log: press **Win+R**, enter `%LOCALAPPDATA%\Berth`,
    and delete that folder.
@@ -199,15 +221,18 @@ Berth doesn't install anything else, write to system folders, or change system f
 | Berth says its settings couldn't be read | Berth moved the unreadable file aside (named `settings.broken-<time>.json`) and started with defaults. Nothing else is needed. |
 | "Couldn't check for updates" | Check your internet connection and try again later. GitHub limits how often a network can query it without signing in, so very frequent checks can be refused for a while. You can always update manually from the Releases page. |
 | "Berth can't replace its own file" | Berth is in a folder you can't write to (such as Program Files). Quit Berth, move the folder somewhere in your user profile, start it from there, then update. |
+| The taskbar stays hidden after Berth closed | Berth was probably stopped unexpectedly. Start Berth and quit it from the tray menu, or turn off **Automatically hide the taskbar** in Windows Settings > Personalization > Taskbar > Taskbar behaviors. |
 | Launch at sign-in doesn't work | Check **Windows Settings > Apps > Startup** and make sure **Berth** is switched on. If you moved `Berth.exe`, start it once from its new location. |
 | Something else | Open **Dashboard > About > Open log folder** and look at `berth.log`. Please include it (after checking it for anything private) when you [open an issue](https://github.com/tahminbinmoin/berth/issues). |
 
 ## Privacy and network behavior
 
 - Berth has no telemetry, analytics, crash reporting, accounts or ads.
-- Berth **only connects to the internet to check for updates**, and only when you click
-  **Check for updates and install** (or **Check for updates…** in the tray menu), or at
-  start-up if you turned on the automatic check (off by default). It then contacts only
+- Berth **only connects to the internet to check for updates**: when you click
+  **Check for updates and install** (or **Check for updates…** in the tray menu), and,
+  while **Notify me when a new version is available** is on (the default since 0.1.3), at
+  start-up and about twice a day. Untick that box in **Dashboard > Updates** and Berth
+  only goes online when you ask. Installing an update always asks first. Berth contacts only
   GitHub: `api.github.com` to read the latest release of `tahminbinmoin/berth`, and
   `github.com` (which hands the download to GitHub's file servers) to download that
   release. The request includes a `Berth/<version>` user agent and nothing about you or
@@ -219,6 +244,8 @@ Berth doesn't install anything else, write to system folders, or change system f
 - To show running indicators, Berth looks at the list of open windows and the program
   each belongs to, the same information the taskbar uses. This stays in memory and is
   never saved or sent anywhere.
+- If you turn on **Hide the Windows taskbar**, Berth changes Windows' taskbar auto-hide
+  setting while it runs and puts it back afterwards, as described above.
 - The only registry change Berth makes is the optional launch-at-sign-in value described
   above.
 
@@ -226,7 +253,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.2 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.1.3 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -248,6 +275,9 @@ This is the first release. Please read these before relying on it.
 - **Auto-hide on the taskbar's edge:** with the taskbar at the bottom and always visible,
   revealing a bottom dock means resting the pointer at the very bottom edge (on the
   taskbar) for a moment.
+- **Hidden taskbar and a bottom dock:** when Berth hides the taskbar, the dock moves down
+  to the screen edge. Moving the pointer to the very bottom brings the taskbar up over the
+  dock until you move away. Windows applies taskbar auto-hide to all displays at once.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard uses standard Windows controls in a light style, even when Windows is in
   dark mode. The dock itself follows the dark theme.
