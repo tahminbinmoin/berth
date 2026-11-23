@@ -1022,6 +1022,12 @@ fn parse_args() -> Args {
             "--startup" => a.startup = true,
             "--reset-settings" => a.reset = true,
             "--after-update" => a.after_update = it.next().and_then(|p| p.parse().ok()),
+            "--taskbar-experiment" => {
+                let report = it.next().unwrap_or_else(|| "taskbar-experiment.txt".into());
+                let lines = taskbar::experiment();
+                let _ = std::fs::write(report, lines.join("\r\n"));
+                std::process::exit(0);
+            }
             "--self-test" => {
                 a.self_test = Some(it.next().unwrap_or_else(|| "berth-self-test.txt".into()))
             }

@@ -428,3 +428,140 @@ pub fn emergency_restore() {
     }
     repair_work_areas();
 }
+
+/// Developer experiment (CI only): how does Windows treat the work area
+/// when the taskbar is hidden and the work area is changed with or
+/// without a broadcast? Returns a log of observations.
+pub fn experiment() -> Vec<String> {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        CreateWindowExW, DestroyWindow, ShowWindow, SW_MAXIMIZE, WINDOW_EX_STYLE,
+        WS_OVERLAPPEDWINDOW,
+    };
+    let mut out = Vec::new();
+    let Some(b) = bars().first().copied() else {
+        out.push("no taskbar".into());
+        return out;
+    };
+    let wait = |ms| std::thread::sleep(Duration::from_millis(ms));
+    let fmt = |r: RECT| format!("{},{}-{},{}", r.left, r.top, r.right, r.bottom);
+    let work = || bars().first().map(|b| b.work).unwrap_or_default();
+    // A maximized test window, to see whether apps get resized.
+    let test = unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("STATIC"),
+            w!("berth-experiment"),
+            WS_OVERLAPPEDWINDOW,
+            100,
+            100,
+            300,
+            200,
+            None,
+            None,
+            None,
+            None,
+        )
+        .ok()
+    };
+    let win_rect = || {
+        let mut r = RECT::default();
+        if let Some(h) = test {
+            unsafe {
+                let _ = GetWindowRect(h, &mut r);
+            }
+        }
+        fmt(r)
+    };
+    if let Some(h) = test {
+        unsafe {
+            let _ = ShowWindow(h, SW_MAXIMIZE);
+        }
+    }
+    wait(500);
+    out.push(format!(
+        "monitor {} work {} bar {:?} {} max-window {}",
+        fmt(b.monitor),
+        fmt(work()),
+        b.edge,
+        fmt(b.rect),
+        win_rect()
+    ));
+    unsafe {
+        let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
+    }
+    wait(600);
+    out.push(format!(
+        "after hide: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    // A: quiet set (no broadcast)
+    let mut r = b.monitor;
+    let ra = unsafe {
+        SystemParametersInfoW(
+            SPI_SETWORKAREA,
+            0,
+            Some(&mut r as *mut RECT as *mut _),
+            Default::default(),
+        )
+    };
+    for ms in [100u64, 400, 1000, 2000] {
+        wait(ms);
+        out.push(format!(
+            "A quiet set ({}) +{ms}ms: work {} max-window {}",
+            ra.is_ok(),
+            fmt(work()),
+            win_rect()
+        ));
+    }
+    // Reveal and hide again.
+    unsafe {
+        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+    }
+    wait(600);
+    out.push(format!(
+        "A after reveal: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    unsafe {
+        let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
+    }
+    wait(600);
+    out.push(format!(
+        "A after re-hide: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    // B: broadcast set
+    let mut r = b.monitor;
+    let rb = unsafe {
+        SystemParametersInfoW(
+            SPI_SETWORKAREA,
+            0,
+            Some(&mut r as *mut RECT as *mut _),
+            SPIF_SENDCHANGE,
+        )
+    };
+    for ms in [100u64, 400, 1000, 2000] {
+        wait(ms);
+        out.push(format!(
+            "B broadcast set ({}) +{ms}ms: work {} max-window {}",
+            rb.is_ok(),
+            fmt(work()),
+            win_rect()
+        ));
+    }
+    // Restore.
+    unsafe {
+        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+        if let Some(h) = test {
+            let _ = DestroyWindow(h);
+        }
+    }
+    wait(500);
+    let _ = set_work_area(work_with_bar(&b));
+    wait(500);
+    out.push(format!("restored: work {}", fmt(work())));
+    out
+}
