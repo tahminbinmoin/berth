@@ -1492,14 +1492,27 @@ fn self_test(report: &str) -> i32 {
             let work_before = bar.work;
             let mut h = taskbar::Hider::default();
             h.enable();
-            for _ in 0..20 {
+            // Tick like the running app does for about 3 seconds.
+            for _ in 0..60 {
                 wait(50);
                 h.tick();
             }
-            wait(400);
             let after = taskbar::bars().first().copied();
             let hidden = unsafe { !IsWindowVisible(bar.hwnd).as_bool() };
             let work_full = after.map(|b| b.work == b.monitor).unwrap_or(false);
+            if let Some(b) = after {
+                lines.push(format!(
+                    "  work area while hidden: {},{} {}x{}; monitor: {},{} {}x{}",
+                    b.work.left,
+                    b.work.top,
+                    b.work.right - b.work.left,
+                    b.work.bottom - b.work.top,
+                    b.monitor.left,
+                    b.monitor.top,
+                    b.monitor.right - b.monitor.left,
+                    b.monitor.bottom - b.monitor.top
+                ));
+            }
             h.disable();
             wait(700);
             let shown = unsafe { IsWindowVisible(bar.hwnd).as_bool() };

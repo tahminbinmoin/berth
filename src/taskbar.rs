@@ -362,21 +362,27 @@ impl Hider {
                 self.saved.push((b.hwnd, w));
             }
             let visible = unsafe { IsWindowVisible(b.hwnd).as_bool() };
+            let mut hidden = !visible;
             if want_visible && !visible {
                 unsafe {
                     let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
                 }
+                hidden = false;
             } else if hide_now && visible {
                 unsafe {
                     let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
                 }
+                hidden = true;
+                // Free the strip right after hiding (Explorer recomputes the
+                // work area when its window changes).
+                self.last_work_fix = None;
             }
-            // Let apps use the taskbar's strip; Explorer sometimes takes it
-            // back, so re-apply at most every 2 s.
-            if b.work != b.monitor {
+            // While hidden, let apps use the taskbar's strip. Explorer may
+            // take it back, so check again every half second.
+            if hidden && b.work != b.monitor {
                 let due = self
                     .last_work_fix
-                    .map(|t| t.elapsed() >= Duration::from_secs(2))
+                    .map(|t| t.elapsed() >= Duration::from_millis(500))
                     .unwrap_or(true);
                 if due {
                     self.last_work_fix = Some(Instant::now());
