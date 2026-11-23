@@ -429,6 +429,71 @@ pub fn emergency_restore() {
     repair_work_areas();
 }
 
+/// Resizes maximized windows on a monitor from the old to the new work
+/// area (keeping their frame overhang). Returns how many were moved.
+pub fn resize_maximized(old_work: RECT, new_work: RECT) -> usize {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, IsZoomed, SetWindowPos, SWP_ASYNCWINDOWPOS, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
+        SWP_NOZORDER,
+    };
+    unsafe extern "system" fn collect(
+        h: HWND,
+        l: windows::Win32::Foundation::LPARAM,
+    ) -> windows::core::BOOL {
+        (*(l.0 as *mut Vec<HWND>)).push(h);
+        windows::core::BOOL(1)
+    }
+    let mut all: Vec<HWND> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(
+            Some(collect),
+            windows::Win32::Foundation::LPARAM(&mut all as *mut _ as isize),
+        );
+    }
+    let mut n = 0;
+    for h in all {
+        unsafe {
+            if !IsWindowVisible(h).as_bool() || !IsZoomed(h).as_bool() {
+                continue;
+            }
+            let mut r = RECT::default();
+            if GetWindowRect(h, &mut r).is_err() {
+                continue;
+            }
+            // Only windows maximized on this monitor's old work area.
+            let cx = (r.left + r.right) / 2;
+            let cy = (r.top + r.bottom) / 2;
+            if cx < old_work.left
+                || cx >= old_work.right
+                || cy < old_work.top
+                || cy >= old_work.bottom
+            {
+                continue;
+            }
+            let (il, it) = (old_work.left - r.left, old_work.top - r.top);
+            let (ir, ib) = (r.right - old_work.right, r.bottom - old_work.bottom);
+            if il.abs() > 16 || it.abs() > 16 || ir.abs() > 16 || ib.abs() > 16 {
+                continue; // not sized to the work area; leave it alone
+            }
+            let x = new_work.left - il;
+            let y = new_work.top - it;
+            let w = (new_work.right + ir) - x;
+            let hgt = (new_work.bottom + ib) - y;
+            let _ = SetWindowPos(
+                h,
+                None,
+                x,
+                y,
+                w,
+                hgt,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_ASYNCWINDOWPOS,
+            );
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Developer experiment (CI only): how does Windows treat the work area
 /// when the taskbar is hidden and the work area is changed with or
 /// without a broadcast? Returns a log of observations.
@@ -551,6 +616,72 @@ pub fn experiment() -> Vec<String> {
             fmt(work()),
             win_rect()
         ));
+    }
+    // Restore Explorer's view first.
+    unsafe {
+        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+    }
+    let _ = set_work_area(work_with_bar(&b));
+    wait(800);
+    out.push(format!(
+        "C start: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    // C: keep the taskbar shown but clip it to an empty region.
+    unsafe {
+        use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
+        let r = SetWindowRgn(b.hwnd, Some(CreateRectRgn(0, 0, 0, 0)), true);
+        out.push(format!("C empty region set: {r}"));
+    }
+    wait(600);
+    out.push(format!(
+        "C after region-hide: work {} visible {}",
+        fmt(work()),
+        unsafe { IsWindowVisible(b.hwnd).as_bool() }
+    ));
+    let mut r = b.monitor;
+    let rc = unsafe {
+        SystemParametersInfoW(
+            SPI_SETWORKAREA,
+            0,
+            Some(&mut r as *mut RECT as *mut _),
+            Default::default(),
+        )
+    };
+    let moved = resize_maximized(work_with_bar(&b), b.monitor);
+    for ms in [100u64, 400, 1000, 2000] {
+        wait(ms);
+        out.push(format!(
+            "C quiet set ({}) moved {moved} +{ms}ms: work {} max-window {}",
+            rc.is_ok(),
+            fmt(work()),
+            win_rect()
+        ));
+    }
+    unsafe {
+        use windows::Win32::Graphics::Gdi::SetWindowRgn;
+        let _ = SetWindowRgn(b.hwnd, None, true);
+    }
+    wait(800);
+    out.push(format!(
+        "C after region-reveal: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    unsafe {
+        use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
+        let _ = SetWindowRgn(b.hwnd, Some(CreateRectRgn(0, 0, 0, 0)), true);
+    }
+    wait(800);
+    out.push(format!(
+        "C after region-rehide: work {} max-window {}",
+        fmt(work()),
+        win_rect()
+    ));
+    unsafe {
+        use windows::Win32::Graphics::Gdi::SetWindowRgn;
+        let _ = SetWindowRgn(b.hwnd, None, true);
     }
     // Restore.
     unsafe {
