@@ -542,6 +542,7 @@ pub fn default_items() -> Vec<PinnedItem> {
             "File Explorer",
             r"shell:AppsFolder\Microsoft.Windows.Explorer",
         ),
+        ("This PC", "shell:MyComputerFolder"),
         ("Microsoft Edge", r"shell:AppsFolder\MSEdge"),
         (
             "Notepad",

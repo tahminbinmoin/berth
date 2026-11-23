@@ -94,6 +94,11 @@ pub struct Settings {
     /// True while Berth itself has the taskbar hidden (left/top/right
     /// taskbars); used to show it again after an unexpected exit.
     pub taskbar_hidden_by_berth: bool,
+    /// Taskbar edge code stored by Windows before Berth's setup moved it
+    /// (for "Undo setup changes").
+    pub taskbar_edge_before: Option<u8>,
+    /// Desktop icon values (This PC, Recycle Bin) before Berth changed them.
+    pub desktop_icons_before: Option<[Option<u32>; 2]>,
     pub items: Vec<PinnedItem>,
 }
 
@@ -119,6 +124,8 @@ impl Default for Settings {
             hide_taskbar: false,
             taskbar_autohide_before: None,
             taskbar_hidden_by_berth: false,
+            taskbar_edge_before: None,
+            desktop_icons_before: None,
             items: Vec::new(),
         }
     }
@@ -153,6 +160,8 @@ impl Settings {
             items: self.items.clone(),
             taskbar_autohide_before: self.taskbar_autohide_before,
             taskbar_hidden_by_berth: self.taskbar_hidden_by_berth,
+            taskbar_edge_before: self.taskbar_edge_before,
+            desktop_icons_before: self.desktop_icons_before,
             ..Settings::default()
         }
     }

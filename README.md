@@ -42,6 +42,11 @@ taskbar away until you need it), and you control all of it from a dashboard.
 - **Hide the Windows taskbar (optional):** Berth can keep the taskbar out of the way
   while it runs, on whichever edge it sits. It comes back when your pointer reaches that
   edge, and everything is put back when you turn this off or quit Berth.
+- **Recommended setup on first launch:** one panel sets Windows up for the dock in a
+  single click: start Berth with Windows, move the taskbar to the left, hide it until
+  needed, and take This PC and Recycle Bin off the desktop (they're on the dock). Every
+  option is pre-ticked but nothing changes until you click **Apply**, and **Undo setup
+  changes** puts Windows back.
 - **Runs in the background:** an icon in the notification area (near the clock) opens the
   dashboard. Berth can start automatically when you sign in to Windows; you choose this on
   first launch and can change it at any time.
@@ -60,6 +65,9 @@ taskbar away until you need it), and you control all of it from a dashboard.
 <p>
   <img src="docs/dashboard-apps-light.png" width="49%" alt="Berth Dashboard, Apps page">
   <img src="docs/dashboard-add-apps-dark.png" width="49%" alt="Add apps panel">
+</p>
+<p>
+  <img src="docs/recommended-setup-dark.png" width="60%" alt="Recommended setup panel shown on first launch">
 </p>
 
 Berth has no accounts, ads, telemetry, subscriptions or cloud features, and it never needs
@@ -106,9 +114,20 @@ program is **not code-signed** (signing certificates cost money; see
    - If **Smart App Control** is on, Windows may block Berth with no option to run it. In
      that case Berth can't run on that PC until a signed release is available. Don't
      turn off Smart App Control just for Berth.
-6. The dock appears and the **Berth Dashboard** opens. Berth asks whether it should **start
-   automatically when you sign in**. Choose **Yes** to have it run in the background every
-   time you turn on your PC, or **No** to start it yourself.
+6. The dock appears and the **Berth Dashboard** opens with the **Recommended setup**
+   panel. Everything is ticked; untick anything you don't want, then click **Apply** (or
+   **Not now** to leave Windows as it is):
+   - **Start Berth with Windows:** Berth runs in the background every time you sign in.
+   - **Move the Windows taskbar to the left:** keeps the bottom edge free for the dock.
+     Windows Explorer restarts for a few seconds to do this (your open windows stay
+     open). If your version of Windows only allows the taskbar at the bottom, Berth
+     says so and leaves it there.
+   - **Hide the Windows taskbar until needed:** it slides in when you point at its edge.
+   - **Remove This PC and Recycle Bin from the desktop:** both are pinned to the dock.
+   - **Tell me about new versions.**
+
+   You can open the panel again, or change each option on its own, in **Dashboard >
+   General > Windows**.
 
 ### Starting with Windows (and turning it off)
 
@@ -141,14 +160,27 @@ are needed.
 - **Open the dashboard:** left-click the tray icon, choose **Open Dashboard…** from any
   Berth menu, or simply run `Berth.exe` again while Berth is already running.
 
-### The Windows taskbar
+### The Windows taskbar and desktop
 
-By default Berth leaves the Windows taskbar alone. It doesn't hide, move or change it, or
-change any taskbar setting. If the dock overlaps something you need, move it to another
-edge, turn on auto-hide, or hide it from the tray menu.
+Berth only changes the taskbar or desktop when you choose to, either in the **Recommended
+setup** panel or in **Dashboard > General > Windows**:
 
-**Optional: hide the taskbar while Berth runs.** Tick **Dashboard > General > Hide the
-Windows taskbar automatically while Berth is running**. How it works depends on where
+- **Taskbar position** (Bottom, Left, Top, Right) moves the Windows taskbar, the same as
+  Settings > Personalization > Taskbar on Windows builds that offer it. Windows only
+  reads this setting when Explorer starts, so Berth restarts Explorer for you (the
+  taskbar and desktop disappear for a few seconds; open windows stay open). Berth then
+  checks that the taskbar really moved. If this version of Windows only supports a
+  bottom taskbar, Berth puts the setting back and tells you.
+- **This PC and Recycle Bin on the desktop** is the same switch as Settings >
+  Personalization > Themes > Desktop icon settings.
+- **Undo setup changes** (shown once Berth has changed either of these) puts the taskbar
+  position and the two desktop icons back exactly as they were before.
+
+If the dock overlaps something you need, move it to another edge, turn on auto-hide, or
+hide it from the tray menu.
+
+**Optional: hide the taskbar while Berth runs.** Turn on **Dashboard > General > Hide the
+Windows taskbar**. How it works depends on where
 your taskbar is:
 
 - **Taskbar at the bottom:** Berth switches on Windows' own **Automatically hide the
@@ -194,7 +226,8 @@ newer release exists, Berth asks once, then:
 
 You can also choose **Check for updates…** from the tray menu, or tick **Check for updates
 automatically when Berth starts** to get a notification when a new version is out (Berth
-still asks before installing anything). The automatic check is off unless you turn it on.
+still asks before installing anything). You can turn the automatic check off on the same
+page.
 
 If Berth's folder isn't writable (for example `C:\Program Files`), it can't replace itself
 and will say so. Move Berth to a folder in your user profile, or update manually.
@@ -214,12 +247,15 @@ from there and the launch-at-sign-in entry will follow it automatically.
 
 ## Uninstall
 
-1. Turn off launch at sign-in: **Dashboard > General**, untick "Start Berth automatically…".
+1. If you used the Recommended setup and want the taskbar and desktop icons back the way
+   they were, click **Dashboard > General > Undo setup changes** first. (Otherwise they
+   stay where you put them, which is fine too; you can change both in Windows Settings.)
+2. Turn off launch at sign-in: **Dashboard > General**, untick "Start Berth automatically…".
    (Or run `Berth.exe --remove-startup` from the Berth folder, which removes the entry and exits.)
-2. Quit Berth (tray icon > **Quit Berth**). If you used **Hide the Windows taskbar**, quitting
+3. Quit Berth (tray icon > **Quit Berth**). If you used **Hide the Windows taskbar**, quitting
    puts your taskbar setting back.
-3. Delete the folder that contains `Berth.exe`.
-4. *(Optional)* Delete your settings and log: press **Win+R**, enter `%LOCALAPPDATA%\Berth`,
+4. Delete the folder that contains `Berth.exe`.
+5. *(Optional)* Delete your settings and log: press **Win+R**, enter `%LOCALAPPDATA%\Berth`,
    and delete that folder.
 
 Berth doesn't install anything else, write to system folders, or change system files.
@@ -266,14 +302,19 @@ Berth doesn't install anything else, write to system folders, or change system f
   setting (bottom taskbar), or clips the taskbar window and adjusts the screen work area
   itself (other edges), while it runs, and puts everything back afterwards, as described
   above.
-- The only registry change Berth makes is the optional launch-at-sign-in value described
-  above.
+- Berth changes the registry (current user only, never system-wide) only for options you
+  turn on: the launch-at-sign-in value described above; the taskbar position byte in
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\StuckRects3` (the value
+  Windows itself uses); and the This PC and Recycle Bin values under
+  `HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\HideDesktopIcons\NewStartPanel`
+  (the ones Desktop icon settings uses). The previous values are kept in
+  `settings.json` for **Undo setup changes**.
 
 ## Current limitations and known issues
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.2.0 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.3.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -304,6 +345,10 @@ This is the first release. Please read these before relying on it.
   but clips it to an invisible, click-through shape, and changes the screen's work area
   without the system-wide notification that made Explorer take the space back.
   After a display change, Explorer may briefly take the strip back before Berth reclaims it.
+- **Moving the taskbar** relies on the position value Windows stores for the taskbar and
+  restarts Explorer to apply it. Left, top and right are only available on Windows 11
+  builds that support them (Berth checks and reverts if not). Microsoft doesn't document
+  this value, so a future Windows update could change it; Berth always checks the result.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard is drawn by Berth itself (only the search and rename boxes are standard
   Windows controls), so screen readers can't yet describe its controls. Keyboard

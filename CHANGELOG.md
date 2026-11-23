@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.3.0 — 2026-11-24
+
+- **New: Recommended setup.** On first launch the dashboard opens a panel that sets Windows
+  up for the dock in one click: start Berth with Windows, move the taskbar to the left,
+  hide it until needed, take This PC and Recycle Bin off the desktop, and get update
+  notifications. Everything is pre-ticked, nothing changes until you click **Apply**, and
+  you can reopen it any time from Dashboard > General.
+- **New: Dashboard > General > Windows** card: taskbar position (Bottom, Left, Top, Right),
+  hide the taskbar, and show or hide This PC and Recycle Bin on the desktop.
+- Moving the taskbar restarts Explorer for a few seconds (in the background; the dashboard
+  stays responsive) and checks that Windows really moved it. On Windows versions that only
+  allow a bottom taskbar, Berth puts the setting back and says so.
+- **Undo setup changes** puts the taskbar position and desktop icons back exactly as they
+  were before Berth changed them.
+- New installs get **This PC** on the dock next to File Explorer.
+- CI now also tests the desktop-icon switch and moving the taskbar (and back) on Windows.
+
 ## 0.2.0 — 2026-11-24
 
 - **New: redesigned Berth Dashboard** in the style of Windows 11 Settings: sidebar with

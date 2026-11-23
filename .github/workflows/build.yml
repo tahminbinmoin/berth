@@ -43,9 +43,16 @@ jobs:
         env:
           # Also toggles taskbar auto-hide on and back off (CI machine only).
           BERTH_TEST_TASKBAR: "1"
+          BERTH_TEST_MOVE: "1"
         run: |
-          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--self-test', "$PWD\self-test.txt" -Wait -PassThru
-          Get-Content self-test.txt
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--self-test', "$PWD\self-test.txt" -PassThru
+          $done = $p.WaitForExit(300000)
+          if (-not $done) { Stop-Process -Id $p.Id -Force }
+          "--- berth.log (tail) ---"
+          Get-Content "$env:LOCALAPPDATA\Berth\berth.log" -Tail 60 -ErrorAction SilentlyContinue
+          "--- report ---"
+          Get-Content self-test.txt -ErrorAction SilentlyContinue
+          if (-not $done) { throw "self-test timed out" }
           if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
 
       - name: Render preview image

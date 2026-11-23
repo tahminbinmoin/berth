@@ -31,8 +31,9 @@ use windows::Win32::UI::WindowsAndMessaging::*;
 use crate::config::{AnimationMode, Edge, HoverEffect, PinnedItem, Settings, ThemeMode};
 use crate::draw::RectF;
 use crate::icons::IconCache;
+use crate::taskbar::{self, BarEdge};
 use crate::widgets::{id, idx, Font, Input, Key, Palette, TextCache, Ui, UiState};
-use crate::{apps, autostart, picker, system, ui, util, with_app, Action};
+use crate::{apps, autostart, picker, system, ui, util, winsetup, with_app, Action};
 
 const CLASS: PCWSTR = w!("BerthDashboard2");
 const WM_APP_DASH_REFRESH: u32 = WM_APP + 40;
@@ -72,11 +73,27 @@ enum Cmd {
     OpenUrl(String),
     OpenSheet,
     CloseSheet,
+    OpenSetup,
+    CloseSetup,
+    ApplySetup(Setup),
+    MoveTaskbar(BarEdge),
+    DesktopIcons(bool),
+    UndoSetup,
     SheetAdd,
     Browse(bool),
     StartRename(usize),
     Move(usize, bool),
     Remove(usize),
+}
+
+/// Choices in the "Recommended setup" panel.
+#[derive(Clone, Copy)]
+struct Setup {
+    autostart: bool,
+    taskbar_left: bool,
+    hide_taskbar: bool,
+    hide_icons: bool,
+    updates: bool,
 }
 
 struct Sheet {
@@ -92,6 +109,9 @@ struct Snap {
     hidden: bool,
     auto: autostart::State,
     displays: Vec<(String, String)>,
+    edge: Option<BarEdge>,
+    icons_shown: bool,
+    setup_busy: bool,
 }
 
 struct Dash {
@@ -108,6 +128,7 @@ struct Dash {
     icons: IconCache,
     icons_pending: bool,
     sheet: Option<Sheet>,
+    setup: Option<Setup>,
     rename: Option<usize>,
     search_edit: HWND,
     rename_edit: HWND,
@@ -258,6 +279,28 @@ pub fn render_to_files(dir: &str) -> Result<usize, String> {
             .map_err(|e| e.to_string())?;
         with_dash(|d| d.sheet = None);
         n += 1;
+        with_dash(|d| {
+            d.page = 0;
+            d.setup = Some(Setup {
+                autostart: true,
+                taskbar_left: true,
+                hide_taskbar: true,
+                hide_icons: true,
+                updates: true,
+            });
+        });
+        frame();
+        frame();
+        let name = format!(
+            "{dir}\\dashboard-setup-{}.png",
+            if dark { "dark" } else { "light" }
+        );
+        with_dash(|d| d.pm.as_ref().map(|p| p.save_png(&name)))
+            .flatten()
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        with_dash(|d| d.setup = None);
+        n += 1;
     }
     Ok(n)
 }
@@ -360,6 +403,25 @@ pub fn self_test() -> (Vec<String>, bool) {
     check(
         &format!("slider Icon size (now {size})"),
         (70..=82).contains(&size),
+        &mut lines,
+    );
+    // Recommended setup panel: opens, ticks a box, closes with "Not now".
+    sim_click(100.0, 92.0 + 18.0);
+    run_cmds(vec![Cmd::OpenSetup]);
+    frame();
+    let opened = with_dash(|d| d.setup.is_some()).unwrap_or(false);
+    let before = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
+    sim_click(338.0, 160.0 + 4.0 * 60.0 + 29.0);
+    let after = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
+    check(
+        "setup panel tick",
+        opened && before.is_some() && before != after,
+        &mut lines,
+    );
+    sim_click(576.0, 580.0);
+    check(
+        "setup panel Not now",
+        with_dash(|d| d.setup.is_none()).unwrap_or(false),
         &mut lines,
     );
     // Keyboard: Tab focuses something, Escape closes nothing harmful.
@@ -466,6 +528,7 @@ fn open_page_inner(page: usize, show: bool) {
             icons: IconCache::default(),
             icons_pending: false,
             sheet: None,
+            setup: None,
             rename: None,
             search_edit: search,
             rename_edit: rename,
@@ -524,25 +587,10 @@ pub fn set_update_status(text: &str, busy: bool) {
     request_frame();
 }
 
-/// First launch: open the dashboard and ask about starting with Windows.
+/// First launch: open the dashboard with the "Recommended setup" panel.
 pub fn first_run_welcome() {
     open_page(0);
-    let owner = hwnd();
-    let yes = util::ask_box(
-        owner,
-        "Welcome to Berth!\n\nStart Berth automatically in the background whenever you sign in to Windows?\n\n\
-         You can change this at any time on the General page of this dashboard, or in Windows Settings > Apps > Startup.\n\n\
-         Berth will also let you know when a new version is out (Dashboard > Updates).",
-    );
-    if yes {
-        if let Err(e) = autostart::enable() {
-            util::error_box(
-                owner,
-                &format!("Berth couldn't turn on launch at sign-in.\n\n{e}"),
-            );
-        }
-    }
-    notify_changed();
+    run_cmds(vec![Cmd::OpenSetup]);
 }
 
 fn request_frame() {
@@ -561,6 +609,10 @@ fn snapshot(displays: &[(String, String)]) -> Option<Snap> {
         hidden: a.dock.user_hidden,
         auto: autostart::state(),
         displays: displays.to_vec(),
+        edge: taskbar::main_edge(),
+        icons_shown: winsetup::desktop_icon_shown(winsetup::THIS_PC)
+            || winsetup::desktop_icon_shown(winsetup::RECYCLE_BIN),
+        setup_busy: crate::setup_busy(),
     })
 }
 
@@ -628,7 +680,7 @@ impl Dash {
             return cmds;
         };
         {
-            let modal = self.sheet.is_some();
+            let modal = self.sheet.is_some() || self.setup.is_some();
             let mut ui = Ui::new(&mut pm, s, pal, &self.input, &mut self.st, &mut self.text);
             let dropdown_open = ui.blocked;
             ui.blocked = dropdown_open || modal;
@@ -687,6 +739,9 @@ impl Dash {
                     &mut self.icons,
                     &mut self.icons_pending,
                 );
+            }
+            if let Some(setup) = self.setup.as_mut() {
+                setup_ui(&mut ui, setup, snap, &mut cmds);
             }
             ui.finish();
         }
@@ -964,11 +1019,38 @@ fn page_general(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
         let e = [Edge::Bottom, Edge::Left, Edge::Right][i.min(2)];
         set(cmds, move |s| s.position = e);
     }
-    y = section(ui, ny + 8.0, "Windows taskbar");
-    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    y = section(ui, ny + 8.0, "Windows");
+    let can_undo = s.taskbar_edge_before.is_some() || s.desktop_icons_before.is_some();
+    let mut heights = vec![ROW, ROW, ROW, ROW];
+    if can_undo {
+        heights.push(ROW);
+    }
+    let (rows, ny) = card_rows(ui, y, &heights);
+    let pos_desc = if snap.setup_busy {
+        "Moving the taskbar\u{2026} Explorer is restarting"
+    } else {
+        "Moving it restarts Explorer for a few seconds; open windows stay open"
+    };
+    label(ui, rows[0], ROW, "Taskbar position", pos_desc, true);
+    let edges = [BarEdge::Bottom, BarEdge::Left, BarEdge::Top, BarEdge::Right];
+    let cur = snap
+        .edge
+        .and_then(|e| edges.iter().position(|x| *x == e))
+        .unwrap_or(0);
+    if let Some(i) = ui.dropdown(
+        id("taskbar-edge"),
+        RectF::new(right() - 240.0, rows[0] + 18.0, 240.0, 32.0),
+        &strings(&["Bottom", "Left", "Top", "Right"]),
+        cur,
+        !snap.setup_busy && snap.edge.is_some(),
+    ) {
+        if i != cur {
+            cmds.push(Cmd::MoveTaskbar(edges[i.min(3)]));
+        }
+    }
     label(
         ui,
-        rows[0],
+        rows[1],
         ROW,
         "Hide the Windows taskbar",
         "It comes back when you move the pointer to its edge. Restored when you quit Berth.",
@@ -977,11 +1059,64 @@ fn page_general(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
     if let Some(v) = ui.toggle(
         id("taskbar"),
         right(),
-        rows[0] + ROW / 2.0,
+        rows[1] + ROW / 2.0,
         s.hide_taskbar,
-        true,
+        !snap.setup_busy,
     ) {
         set(cmds, move |s| s.hide_taskbar = v);
+    }
+    label(
+        ui,
+        rows[2],
+        ROW,
+        "This PC and Recycle Bin on the desktop",
+        "Both are also on the dock",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("desktop-icons"),
+        right(),
+        rows[2] + ROW / 2.0,
+        snap.icons_shown,
+        true,
+    ) {
+        cmds.push(Cmd::DesktopIcons(v));
+    }
+    label(
+        ui,
+        rows[3],
+        ROW,
+        "Recommended setup",
+        "Set up Windows for Berth in one step",
+        true,
+    );
+    if ui.button(
+        id("open-setup"),
+        RectF::new(right() - 120.0, rows[3] + 18.0, 120.0, 32.0),
+        "Open\u{2026}",
+        false,
+        !snap.setup_busy,
+    ) {
+        cmds.push(Cmd::OpenSetup);
+    }
+    if can_undo {
+        label(
+            ui,
+            rows[4],
+            ROW,
+            "Undo setup changes",
+            "Puts the taskbar position and desktop icons back the way they were before Berth changed them",
+            true,
+        );
+        if ui.button(
+            id("undo-setup"),
+            RectF::new(right() - 120.0, rows[4] + 18.0, 120.0, 32.0),
+            "Undo",
+            false,
+            !snap.setup_busy,
+        ) {
+            cmds.push(Cmd::UndoSetup);
+        }
     }
     y = section(ui, ny + 8.0, "Berth");
     let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW]);
@@ -1800,6 +1935,144 @@ fn sheet_ui(
     }
 }
 
+// ----- "Recommended setup" panel -----------------------------------------------------
+
+const SETUP_ROWS: [(&str, &str); 5] = [
+    (
+        "Start Berth with Windows",
+        "Opens quietly in the background when you sign in",
+    ),
+    (
+        "Move the Windows taskbar to the left",
+        "Keeps the bottom of the screen free for the dock",
+    ),
+    (
+        "Hide the Windows taskbar until needed",
+        "It slides in when you point at its edge",
+    ),
+    (
+        "Remove This PC and Recycle Bin from the desktop",
+        "Both stay on the dock",
+    ),
+    (
+        "Tell me about new versions",
+        "Berth checks GitHub for updates; nothing else is sent",
+    ),
+];
+
+fn setup_ui(ui: &mut Ui, setup: &mut Setup, snap: &Snap, cmds: &mut Vec<Cmd>) {
+    ui.set_clip(None);
+    ui.dy = 0.0;
+    let full = RectF::new(0.0, 0.0, W, H);
+    ui.fill_round(full, 0.0, ui.p.scrim);
+    let (pw, ph) = (580.0, 560.0);
+    let panel = RectF::new((W - pw) / 2.0, (H - ph) / 2.0, pw, ph);
+    for i in 0..8 {
+        let g = 8.0 - i as f32;
+        ui.fill_round(
+            RectF::new(
+                panel.x - g,
+                panel.y - g + 4.0,
+                panel.w + 2.0 * g,
+                panel.h + 2.0 * g,
+            ),
+            8.0 + g,
+            tiny_skia::Color::from_rgba8(0, 0, 0, 8),
+        );
+    }
+    ui.fill_round(panel, 8.0, ui.p.bg);
+    ui.stroke_round(panel, 8.0, ui.p.card_border, 1.0);
+    let x = panel.x + 24.0;
+    let w = panel.w - 48.0;
+    ui.text_at(
+        "Welcome to Berth",
+        x,
+        panel.y + 22.0,
+        Font::Title,
+        20.0,
+        ui.p.text,
+        w,
+        false,
+    );
+    ui.text_at(
+        "Recommended setup. Untick anything you don't want; you can change all of it later on this page.",
+        x,
+        panel.y + 54.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        w,
+        true,
+    );
+    let rh = 60.0;
+    let list = RectF::new(x, panel.y + 96.0, w, rh * SETUP_ROWS.len() as f32 + 8.0);
+    ui.card(list);
+    let left_disabled = snap.edge == Some(BarEdge::Left);
+    for (i, (title, desc)) in SETUP_ROWS.iter().enumerate() {
+        let ry = list.y + 4.0 + i as f32 * rh;
+        let r = RectF::new(list.x + 4.0, ry, list.w - 8.0, rh - 2.0);
+        let value = match i {
+            0 => &mut setup.autostart,
+            1 => &mut setup.taskbar_left,
+            2 => &mut setup.hide_taskbar,
+            3 => &mut setup.hide_icons,
+            _ => &mut setup.updates,
+        };
+        let enabled = !(i == 1 && left_disabled);
+        let (hov, clicked) = ui.interact(idx("setup-row", i), r, true, enabled);
+        if hov {
+            ui.fill_round(r, 4.0, ui.p.hover);
+        }
+        let cy = ry + rh / 2.0 - 1.0;
+        let shown = if i == 1 && left_disabled {
+            true
+        } else {
+            *value
+        };
+        ui.checkbox_box(r.x + 12.0, cy, shown);
+        let desc = if i == 1 && left_disabled {
+            "It's already on the left"
+        } else {
+            desc
+        };
+        ui.row_label(r.x + 46.0, ry, rh - 2.0, r.w - 60.0, title, desc, enabled);
+        if clicked {
+            *value = !*value;
+            ui.st.want_frame = true;
+        }
+    }
+    let ny = list.y + list.h + 14.0;
+    let note = if setup.taskbar_left && !left_disabled {
+        "Moving the taskbar restarts Windows Explorer: the taskbar and desktop disappear for a few seconds. \
+         Open windows stay open. Nothing changes until you choose Apply."
+    } else {
+        "Nothing changes until you choose Apply. \"Undo setup changes\" on the General page puts Windows back."
+    };
+    ui.text_at(note, x, ny, Font::Body, 12.0, ui.p.text2, w, true);
+    let fy = panel.y + ph - 56.0;
+    if ui.button(
+        id("setup-apply"),
+        RectF::new(x + w - 120.0, fy, 120.0, 32.0),
+        "Apply",
+        true,
+        !snap.setup_busy,
+    ) {
+        cmds.push(Cmd::ApplySetup(*setup));
+    }
+    if ui.button(
+        id("setup-skip"),
+        RectF::new(x + w - 250.0, fy, 120.0, 32.0),
+        "Not now",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::CloseSetup);
+    }
+    if ui.input.key == Some(Key::Escape) && ui.st.dropdown.is_none() {
+        cmds.push(Cmd::CloseSetup);
+    }
+}
+
 fn filter_sheet(sheet: &mut Sheet) {
     let q = sheet.query.trim().to_lowercase();
     sheet.shown = (0..sheet.apps.len())
@@ -1920,6 +2193,56 @@ fn edit_done(edit: HWND, how: usize) {
 
 // ----- commands -----------------------------------------------------------------------
 
+/// Carries out the "Recommended setup" choices.
+fn apply_setup(v: Setup) {
+    let owner = hwnd();
+    // Move the taskbar first: the hide option is applied to it once it has
+    // moved (Berth keeps the taskbar visible while Explorer restarts).
+    if v.taskbar_left && taskbar::main_edge().is_some_and(|e| e != BarEdge::Left) {
+        crate::move_taskbar(BarEdge::Left);
+    }
+    if v.autostart && autostart::state() != autostart::State::On {
+        if let Err(e) = autostart::enable() {
+            util::error_box(
+                owner,
+                &format!("Berth couldn't turn on launch at sign-in.\n\n{e}"),
+            );
+        }
+    }
+    if v.hide_icons {
+        // Make sure both are on the dock before taking them off the desktop.
+        let missing: Vec<PinnedItem> = [
+            ("This PC", "shell:MyComputerFolder"),
+            ("Recycle Bin", "shell:RecycleBinFolder"),
+        ]
+        .iter()
+        .filter(|(_, t)| {
+            with_app(|a| {
+                !a.settings
+                    .items
+                    .iter()
+                    .any(|i| i.target.eq_ignore_ascii_case(t))
+            })
+            .unwrap_or(false)
+        })
+        .map(|(n, t)| PinnedItem {
+            name: n.to_string(),
+            target: t.to_string(),
+        })
+        .collect();
+        if !missing.is_empty() {
+            crate::add_items(missing, None);
+        }
+        crate::set_desktop_icons(false);
+    }
+    with_app(|a| {
+        a.settings.hide_taskbar = v.hide_taskbar;
+        a.settings.check_updates_on_startup = v.updates;
+        a.apply();
+    });
+    notify_changed();
+}
+
 fn run_cmds(cmds: Vec<Cmd>) {
     for c in cmds {
         match c {
@@ -1964,6 +2287,40 @@ fn run_cmds(cmds: Vec<Cmd>) {
             Cmd::CheckUpdates => crate::check_for_updates(),
             Cmd::OpenUrl(u) => {
                 let _ = apps::launch(&u);
+            }
+            Cmd::OpenSetup => {
+                if let Some(s) = with_app(|a| a.settings.clone()) {
+                    let edge = taskbar::main_edge();
+                    with_dash(|d| {
+                        d.setup = Some(Setup {
+                            autostart: true,
+                            taskbar_left: edge.is_some() && edge != Some(BarEdge::Left),
+                            hide_taskbar: true,
+                            hide_icons: true,
+                            updates: s.check_updates_on_startup,
+                        });
+                    });
+                    request_frame();
+                }
+            }
+            Cmd::CloseSetup => {
+                with_dash(|d| d.setup = None);
+                request_frame();
+            }
+            Cmd::ApplySetup(v) => {
+                with_dash(|d| d.setup = None);
+                apply_setup(v);
+            }
+            Cmd::MoveTaskbar(e) => crate::move_taskbar(e),
+            Cmd::DesktopIcons(show) => crate::set_desktop_icons(show),
+            Cmd::UndoSetup => {
+                if util::ask_box(
+                    hwnd(),
+                    "Put the taskbar position and the This PC and Recycle Bin desktop icons back the way they were before Berth changed them?\n\n\
+                     If the taskbar moves, Windows Explorer restarts for a few seconds.",
+                ) {
+                    crate::undo_setup();
+                }
             }
             Cmd::OpenSheet => {
                 let already = with_dash(|d| d.sheet.is_some()).unwrap_or(true);
