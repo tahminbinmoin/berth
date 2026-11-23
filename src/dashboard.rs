@@ -333,6 +333,22 @@ pub fn self_test() -> (Vec<String>, bool) {
         a.settings.position = Edge::Bottom;
         a.apply();
     });
+    // Dropdown by mouse: open Position and click "Right" (third item).
+    let anchor_y = 242.0 + 2.0 * ROW + 18.0;
+    sim_click(right() - 120.0, anchor_y + 16.0);
+    let opened = with_dash(|d| d.st.dropdown.is_some()).unwrap_or(false);
+    let item_top = anchor_y - 4.0 + (32.0 - 36.0) / 2.0 + 4.0;
+    sim_click(right() - 120.0, item_top + 2.0 * 36.0 + 17.0);
+    let pos = with_app(|a| a.settings.position).unwrap_or(Edge::Bottom);
+    check(
+        "dropdown by mouse",
+        opened && pos == Edge::Right,
+        &mut lines,
+    );
+    with_app(|a| {
+        a.settings.position = Edge::Bottom;
+        a.apply();
+    });
     // Slider drag: Appearance > Icon size to about the middle.
     sim_click(100.0, 92.0 + 40.0 + 18.0);
     let (sx, sy, sw) = (right() - 220.0, 310.0 + ROW / 2.0, 220.0);

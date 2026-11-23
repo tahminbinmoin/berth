@@ -51,8 +51,12 @@ jobs:
       - name: Render preview image
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force dash | Out-Null
           $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-preview', "$PWD\preview.png" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "preview failed" }
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-preview', "$PWD\dash\dock-preview-dark.png", '--dark' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "dark preview failed" }
+          Copy-Item preview.png dash\dock-preview-light.png
 
       - name: Render dashboard pages
         shell: pwsh

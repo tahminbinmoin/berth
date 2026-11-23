@@ -70,18 +70,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.7 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.2.0 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.7-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.7-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.2.0-windows-x64.zip`**. Optionally also download
+   **`Berth-0.2.0-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.7-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.2.0-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -266,7 +266,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.7 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.2.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.

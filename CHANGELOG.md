@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 — 2026-11-24
+
+- **New: redesigned Berth Dashboard** in the style of Windows 11 Settings: sidebar with
+  Fluent icons, rounded setting cards, toggle switches, modern sliders and dropdowns, light
+  and dark themes that follow Berth's theme setting, and the Windows accent colour. The
+  title bar matches the theme.
+- **New:** the **Add apps** panel is built into the dashboard (Apps page), with app icons,
+  search and multi-select. The Apps page shows each pinned app's icon, with buttons to
+  reorder, rename (inline) and remove.
+- Keyboard: Tab moves between controls (with focus rings), Space/Enter activate, arrow
+  keys change sliders and dropdowns, Esc closes.
+- An automated test now drives the dashboard on Windows in CI (navigation, toggles,
+  dropdowns by keyboard and mouse, slider dragging).
+
 ## 0.1.7 — 2026-11-24
 
 - **Fixed:** the dock stayed hidden while a maximized app was in front. Since maximized
