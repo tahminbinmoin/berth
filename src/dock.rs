@@ -23,7 +23,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::apps::{self, MatchKeys};
-use crate::config::{Edge, HoverEffect, PinnedItem, Settings};
+use crate::config::{self, Edge, HoverEffect, PinnedItem, Settings};
 use crate::draw::{self, rgba, RectF};
 use crate::icons::IconCache;
 use crate::system::{self, Monitor};
@@ -43,6 +43,10 @@ pub struct Entry {
     /// Hover emphasis, animated between 0 and 1.
     pub hl: f32,
     pub bounce: Option<Instant>,
+    /// One of its windows is asking for attention (flashing): the icon keeps
+    /// bouncing until the window is activated.
+    pub attention: bool,
+    bounce_done: Option<Instant>,
     label: Option<(String, i32, bool, Pixmap)>,
     /// Grouping key for running apps that are not pinned.
     run_key: String,
@@ -57,6 +61,8 @@ impl Entry {
             windows: Vec::new(),
             hl: 0.0,
             bounce: None,
+            attention: false,
+            bounce_done: None,
             label: None,
             run_key: String::new(),
         }
@@ -64,6 +70,19 @@ impl Entry {
     pub fn running(&self) -> bool {
         !self.windows.is_empty()
     }
+    fn is_bin(&self) -> bool {
+        self.pinned && config::is_recycle_bin(&self.item.target)
+    }
+}
+
+/// What a released mouse button did on the dock.
+pub enum Released {
+    Nothing,
+    Click(usize),
+    /// Pinned item moved from one position to another.
+    Reorder(usize, usize),
+    /// Pinned item at this position was dragged off the dock.
+    Remove(usize),
 }
 
 /// Size and placement derived from the settings and the chosen display.
@@ -149,6 +168,9 @@ struct Drag {
     idx: usize,
     insert: usize,
     u: f32,
+    v: f32,
+    /// Far enough from the dock that letting go removes the icon.
+    outside: bool,
 }
 
 struct Surface {
@@ -201,6 +223,9 @@ pub struct Dock {
     pub dark: bool,
     pub animate: bool,
     effect: HoverEffect,
+    trash_end: bool,
+    bin_full: Option<bool>,
+    remove_label: Option<(i32, bool, Pixmap)>,
     pub last_error: Option<String>,
 }
 
@@ -273,6 +298,9 @@ impl Dock {
             dark: false,
             animate: true,
             effect: HoverEffect::Magnify,
+            trash_end: true,
+            bin_full: None,
+            remove_label: None,
             last_error: None,
         }
     }
@@ -307,6 +335,113 @@ impl Dock {
 
     pub fn pinned_count(&self) -> usize {
         self.entries.iter().filter(|e| e.pinned).count()
+    }
+
+    /// The Recycle Bin entry when it is kept at the end of the dock.
+    fn trailing_bin(&self) -> Option<usize> {
+        if !self.trash_end {
+            return None;
+        }
+        self.entries.iter().position(|e| e.is_bin())
+    }
+
+    fn separator_count(&self) -> usize {
+        let bin = self.trailing_bin();
+        let pinned = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(i, e)| e.pinned && Some(*i) != bin)
+            .count();
+        let running = self.entries.iter().filter(|e| !e.pinned).count();
+        let mut n = 0;
+        if pinned > 0 && running > 0 {
+            n += 1;
+        }
+        if bin.is_some() && pinned + running > 0 {
+            n += 1;
+        }
+        n
+    }
+
+    /// Index of the entry that is the Recycle Bin, if any.
+    pub fn bin_index(&self) -> Option<usize> {
+        self.entries.iter().position(|e| e.is_bin())
+    }
+
+    /// A window is asking for attention: bounce its app's icon until the
+    /// window is activated.
+    pub fn flash(&mut self, hwnd: HWND) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.windows.contains(&hwnd)) {
+            if !e.attention {
+                e.attention = true;
+                e.bounce_done = None;
+            }
+        }
+        self.ensure_frame_timer();
+    }
+
+    /// A window was activated: stop asking for attention for its app.
+    pub fn activated(&mut self, hwnd: HWND) {
+        let mut changed = false;
+        for e in self.entries.iter_mut().filter(|e| e.attention) {
+            if e.windows.contains(&hwnd) {
+                e.attention = false;
+                changed = true;
+            }
+        }
+        if changed {
+            self.ensure_frame_timer();
+        }
+    }
+
+    pub fn clear_attention(&mut self, idx: usize) {
+        if let Some(e) = self.entries.get_mut(idx) {
+            e.attention = false;
+        }
+    }
+
+    /// The icon of an entry in screen coordinates (at rest size).
+    pub fn entry_screen_rect(&self, idx: usize) -> Option<RECT> {
+        let g = self.geo.as_ref()?;
+        let (slots, _, _) = self.layout(g);
+        let sl = slots.iter().find(|s| s.kind == SlotKind::Entry(idx))?;
+        let off = -self.hide * g.slide_distance();
+        let r = g.rect(sl.u0, sl.len, g.margin + off + g.pad + sl.lift, sl.len);
+        Some(RECT {
+            left: g.win.left + r.x.round() as i32,
+            top: g.win.top + r.y.round() as i32,
+            right: g.win.left + (r.x + r.w).round() as i32,
+            bottom: g.win.top + (r.y + r.h).round() as i32,
+        })
+    }
+
+    /// The entry under the pointer while the dock is simply being hovered
+    /// (no press, drag or menu).
+    pub fn hover_entry(&self) -> Option<usize> {
+        if self.press.is_some() || self.drag.is_some() || self.menu_open || self.hover_target <= 0.0
+        {
+            return None;
+        }
+        self.hovered
+    }
+
+    pub fn edge(&self) -> Option<Edge> {
+        self.geo.as_ref().map(|g| g.edge)
+    }
+
+    /// The panel rectangle in screen coordinates.
+    pub fn panel_screen_rect(&self) -> Option<RECT> {
+        let g = self.geo.as_ref()?;
+        let (_, p0, plen) = self.layout(g);
+        let off = -self.hide * g.slide_distance();
+        let r = g.rect(p0, plen, g.margin + off, g.thick);
+        Some(RECT {
+            left: g.win.left + r.x as i32,
+            top: g.win.top + r.y as i32,
+            right: g.win.left + (r.x + r.w) as i32,
+            bottom: g.win.top + (r.y + r.h) as i32,
+        })
     }
 
     /// Re-checks which apps have windows open. Returns true if anything changed.
@@ -418,6 +553,7 @@ impl Dock {
         self.dark = system::is_dark(settings.theme);
         self.animate = system::animations_enabled(settings.animations);
         self.effect = settings.hover_effect;
+        self.trash_end = settings.trash_at_end;
         let Some(mon) = system::pick_monitor(&settings.display) else {
             self.geo = None;
             return;
@@ -436,15 +572,11 @@ impl Dock {
             ),
         };
         let n = self.entries.len().max(1) as f32;
-        let has_sep =
-            self.entries.iter().any(|e| e.pinned) && self.entries.iter().any(|e| !e.pinned);
+        let seps = self.separator_count() as f32;
         let mut s = (settings.icon_size as f32 * scale).round();
         let gap = (settings.spacing as f32 * scale).round();
-        let sep_w = if has_sep {
-            (2.0 * scale).round().max(1.0) + gap
-        } else {
-            0.0
-        };
+        let sep_w = (2.0 * scale).round().max(1.0) + gap;
+        let sep_total = seps * sep_w;
         let mag = if settings.hover_effect == HoverEffect::Magnify {
             settings.magnification as f32 / 100.0
         } else {
@@ -455,7 +587,11 @@ impl Dock {
 
         // Shrink icons if they would not fit on the display.
         let fixed = |s: f32| {
-            (n - 1.0) * gap + 2.0 * pad_for(s) + sep_w + 2.0 * sm + (mag - 1.0) * s * 2.62f32.min(n)
+            (n - 1.0) * gap
+                + 2.0 * pad_for(s)
+                + sep_total
+                + 2.0 * sm
+                + (mag - 1.0) * s * 2.62f32.min(n)
         };
         let max_len = avail_main - 8.0 * scale;
         if n * s + fixed(s) > max_len {
@@ -495,7 +631,7 @@ impl Dock {
             Edge::Bottom => work.bottom - h,
             _ => work.top + ((work.bottom - work.top) - h) / 2,
         };
-        let radius = (thick * 0.3).round();
+        let radius = (thick * 0.36).round();
         self.geo = Some(Geometry {
             monitor: mon,
             scale,
@@ -557,13 +693,21 @@ impl Dock {
     fn layout(&self, g: &Geometry) -> (Vec<Slot>, f32, f32) {
         // Element order, with the dragged icon replaced by a drop gap.
         let mut order: Vec<SlotKind> = Vec::new();
+        let bin = self.trailing_bin();
         let pinned: Vec<usize> = (0..self.entries.len())
-            .filter(|&i| self.entries[i].pinned)
+            .filter(|&i| self.entries[i].pinned && Some(i) != bin)
             .collect();
         let running: Vec<usize> = (0..self.entries.len())
             .filter(|&i| !self.entries[i].pinned)
             .collect();
         match &self.drag {
+            Some(d) if d.outside => order.extend(
+                pinned
+                    .iter()
+                    .copied()
+                    .filter(|&i| i != d.idx)
+                    .map(SlotKind::Entry),
+            ),
             Some(d) => {
                 let mut rest: Vec<usize> = pinned.iter().copied().filter(|&i| i != d.idx).collect();
                 let at = d.insert.min(rest.len());
@@ -582,6 +726,12 @@ impl Dock {
             order.push(SlotKind::Separator);
         }
         order.extend(running.iter().map(|&i| SlotKind::Entry(i)));
+        if let Some(b) = bin {
+            if !order.is_empty() {
+                order.push(SlotKind::Separator);
+            }
+            order.push(SlotKind::Entry(b));
+        }
 
         let base_len = |k: &SlotKind| match k {
             SlotKind::Separator => g.sep_w,
@@ -722,26 +872,40 @@ impl Dock {
     pub fn on_mouse_move(&mut self, x: f32, y: f32) {
         self.mouse = Some((x, y));
         self.hover_target = 1.0;
+        crate::preview::poke();
         if let Some(p) = &self.press {
             let dist = ((x - p.x).powi(2) + (y - p.y).powi(2)).sqrt();
             let threshold = 6.0 * self.geo.as_ref().map(|g| g.scale).unwrap_or(1.0);
             if self.drag.is_none()
                 && dist > threshold
                 && self.entries.get(p.idx).map(|e| e.pinned) == Some(true)
+                && self.trailing_bin() != Some(p.idx)
             {
                 self.drag = Some(Drag {
                     idx: p.idx,
                     insert: 0,
                     u: 0.0,
+                    v: 0.0,
+                    outside: false,
                 });
             }
         }
         if self.drag.is_some() {
+            let outside = self.far_from_dock(x, y);
+            if let Some(d) = &mut self.drag {
+                d.outside = outside;
+            }
+            crate::preview::hide();
             let insert = self.insert_index_at(x, y);
-            let u = self.geo.as_ref().map(|g| g.to_uv(x, y).0).unwrap_or(0.0);
+            let (u, v) = self
+                .geo
+                .as_ref()
+                .map(|g| g.to_uv(x, y))
+                .unwrap_or((0.0, 0.0));
             if let Some(d) = &mut self.drag {
                 d.insert = insert;
                 d.u = u;
+                d.v = v;
             }
         } else {
             self.hovered = self.hit(x, y);
@@ -760,30 +924,30 @@ impl Dock {
         }
     }
 
-    /// Returns the clicked entry (if the press was a click) or the completed
-    /// reorder `(from, to)` among pinned items.
-    pub fn on_button_up(&mut self, x: f32, y: f32) -> (Option<usize>, Option<(usize, usize)>) {
+    /// Whether a dragged icon is far enough from the dock to be removed
+    /// when released.
+    fn far_from_dock(&self, x: f32, y: f32) -> bool {
+        let Some(g) = self.geo.as_ref() else {
+            return false;
+        };
+        let (u, v) = g.to_uv(x, y);
+        let (_, p0, plen) = self.layout(g);
+        v > g.margin + g.thick + g.s * 0.9 || u < p0 - g.s * 1.5 || u > p0 + plen + g.s * 1.5
+    }
+
+    pub fn on_button_up(&mut self, x: f32, y: f32) -> Released {
         let press = self.press.take();
         if let Some(d) = self.drag.take() {
             self.ensure_frame_timer();
-            let inside = self.geo.as_ref().map(|g| {
-                let (_, v) = g.to_uv(x, y);
-                v >= -g.s
-                    && v <= g.margin + g.thick + g.s * 1.5
-                    && x >= 0.0
-                    && y >= 0.0
-                    && x <= g.w as f32
-                    && y <= g.h as f32
-            });
-            if inside == Some(true) {
-                let from = self.entries[..d.idx].iter().filter(|e| e.pinned).count();
-                return (None, Some((from, d.insert)));
+            let from = self.entries[..d.idx].iter().filter(|e| e.pinned).count();
+            if self.far_from_dock(x, y) {
+                return Released::Remove(from);
             }
-            return (None, None);
+            return Released::Reorder(from, d.insert);
         }
         match press {
-            Some(p) if self.hit(x, y) == Some(p.idx) => (Some(p.idx), None),
-            _ => (None, None),
+            Some(p) if self.hit(x, y) == Some(p.idx) => Released::Click(p.idx),
+            _ => Released::Nothing,
         }
     }
 
@@ -858,6 +1022,7 @@ impl Dock {
                     self.mouse = Some((x, y));
                     self.hovered = self.hit(x, y);
                 }
+                None if crate::preview::holds_hover() => {}
                 None => {
                     self.hover_target = 0.0;
                     self.hovered = None;
@@ -875,6 +1040,7 @@ impl Dock {
             if let Some(b) = self.entries[i].bounce {
                 if b.elapsed() >= BOUNCE {
                     self.entries[i].bounce = None;
+                    self.entries[i].bounce_done = Some(Instant::now());
                 }
                 busy = true;
             }
@@ -901,6 +1067,36 @@ impl Dock {
                     self.relayout(settings);
                 }
                 needs_frame = true;
+            }
+        }
+
+        // Keep bouncing icons whose windows want attention.
+        if self.animate {
+            for e in self
+                .entries
+                .iter_mut()
+                .filter(|e| e.attention && e.bounce.is_none())
+            {
+                let rested = e
+                    .bounce_done
+                    .map(|t| t.elapsed() >= Duration::from_millis(650))
+                    .unwrap_or(true);
+                if rested {
+                    e.bounce = Some(Instant::now());
+                    needs_frame = true;
+                }
+            }
+        }
+
+        // Show the Recycle Bin as empty or full.
+        if self.poll_count % 20 == 3 && self.bin_index().is_some() {
+            let full = apps::recycle_bin_full();
+            if full.is_some() && full != self.bin_full {
+                if self.bin_full.is_some() {
+                    self.icons.forget(config::RECYCLE_BIN);
+                    needs_frame = true;
+                }
+                self.bin_full = full;
             }
         }
 
@@ -944,6 +1140,7 @@ impl Dock {
             return;
         };
         let busy = self.hover_target > 0.0
+            || crate::preview::is_open()
             || self.menu_open
             || self.drag.is_some()
             || self.press.is_some();
@@ -1069,43 +1266,50 @@ impl Dock {
             &mut scratch,
             panel,
             g.radius,
-            10.0 * g.scale,
-            shadow_off,
-            if dark { 0.55 } else { 0.30 },
+            16.0 * g.scale,
+            (shadow_off.0 * 2.0, shadow_off.1 * 2.0),
+            if dark { 0.60 } else { 0.28 },
         );
         if let Some(path) = draw::rounded_rect(panel, g.radius) {
+            // Frosted glass: a translucent body, brighter towards the side
+            // facing away from the screen edge, with a bright rim on that side.
             let base = if dark {
-                rgba(32, 32, 36, opacity)
+                rgba(30, 30, 34, opacity)
             } else {
-                rgba(248, 248, 250, opacity)
+                rgba(246, 246, 249, opacity)
             };
             draw::fill(&mut pm, &path, base);
-            // A soft sheen on the side facing away from the screen edge.
-            let (a, b) = (
-                g.point(p0, g.margin + off + g.thick),
-                g.point(p0, g.margin + off + g.thick * 0.45),
-            );
-            let sheen = if dark { 0.07 } else { 0.30 };
-            if let Some(sh) =
-                draw::gradient(a, b, rgba(255, 255, 255, sheen), rgba(255, 255, 255, 0.0))
-            {
+            let far = g.point(p0, g.margin + off + g.thick);
+            let near = g.point(p0, g.margin + off);
+            let (top_a, bot_a) = if dark { (0.10, 0.0) } else { (0.45, 0.06) };
+            if let Some(sh) = draw::gradient(
+                far,
+                near,
+                rgba(255, 255, 255, top_a),
+                rgba(255, 255, 255, bot_a),
+            ) {
                 let mut paint = draw::solid(Color::WHITE);
                 paint.shader = sh;
                 draw::fill_with(&mut pm, &path, &paint);
             }
             let outer = if dark {
-                rgba(0, 0, 0, 0.55)
+                rgba(0, 0, 0, 0.60)
             } else {
-                rgba(0, 0, 0, 0.12)
+                rgba(0, 0, 0, 0.10)
             };
             draw::stroke(&mut pm, &path, outer, 1.0);
             if let Some(inner) = draw::rounded_rect(panel.inset(1.0), (g.radius - 1.0).max(0.0)) {
-                let c = if dark {
-                    rgba(255, 255, 255, 0.10)
-                } else {
-                    rgba(255, 255, 255, 0.55)
-                };
-                draw::stroke(&mut pm, &inner, c, 1.0);
+                let (rim_far, rim_near) = if dark { (0.30, 0.04) } else { (0.95, 0.25) };
+                if let Some(sh) = draw::gradient(
+                    far,
+                    g.point(p0, g.margin + off + g.thick * 0.35),
+                    rgba(255, 255, 255, rim_far),
+                    rgba(255, 255, 255, rim_near),
+                ) {
+                    let mut paint = draw::solid(Color::WHITE);
+                    paint.shader = sh;
+                    draw::stroke_with(&mut pm, &inner, &paint, 1.0);
+                }
             }
         }
 
@@ -1177,10 +1381,16 @@ impl Dock {
                         alpha *= 0.7;
                     }
                     self.draw_icon(&mut pm, &target, r, base_px, big_px, alpha, dark);
-                    if settings.show_running_indicators && running {
+                    let attention = self.entries[i].attention;
+                    if (settings.show_running_indicators && running) || attention {
                         let (cx, cy) = g.point(sl.u0 + sl.len / 2.0, g.margin + off + g.pad * 0.42);
                         if let Some(p) = draw::circle(cx, cy, (2.2 * g.scale).max(1.5)) {
-                            draw::fill(&mut pm, &p, dot_color);
+                            let c = if attention {
+                                rgba(255, 149, 0, 1.0)
+                            } else {
+                                dot_color
+                            };
+                            draw::fill(&mut pm, &p, c);
                         }
                     }
                     if self.hovered == Some(i) && self.drag.is_none() && !self.menu_open {
@@ -1190,13 +1400,38 @@ impl Dock {
             }
         }
 
-        // The icon being dragged follows the pointer.
-        if let Some(d) = &self.drag {
-            if let Some(e) = self.entries.get(d.idx) {
-                let u0 = d.u - g.s / 2.0;
-                let r = g.rect(u0, g.s, g.margin + off + g.pad + g.lift_h * 0.5, g.s);
+        // The icon being dragged follows the pointer; away from the dock it
+        // turns translucent with a "Remove" tag.
+        if let Some((idx, du, dv, outside)) =
+            self.drag.as_ref().map(|d| (d.idx, d.u, d.v, d.outside))
+        {
+            if let Some(e) = self.entries.get(idx) {
                 let target = e.item.target.clone();
-                self.draw_icon(&mut pm, &target, r, base_px, big_px, 0.85, dark);
+                let u0 = du - g.s / 2.0;
+                let rest = g.margin + off + g.pad + g.lift_h * 0.5;
+                let cross = match g.edge {
+                    Edge::Bottom => g.h as f32,
+                    _ => g.w as f32,
+                };
+                let v0 = if outside {
+                    let tag = g.label_font as f32 * 2.4 + 12.0 * g.scale;
+                    (dv - g.s / 2.0).clamp(rest, (cross - g.s - tag).max(rest))
+                } else {
+                    rest
+                };
+                let r = g.rect(u0, g.s, v0, g.s);
+                self.draw_icon(
+                    &mut pm,
+                    &target,
+                    r,
+                    base_px,
+                    big_px,
+                    if outside { 0.5 } else { 0.85 },
+                    dark,
+                );
+                if outside {
+                    self.draw_remove_tag(&mut pm, &g, du, v0 + g.s + 6.0 * g.scale);
+                }
             }
         }
 
@@ -1346,6 +1581,52 @@ impl Dock {
         );
     }
 
+    fn draw_remove_tag(&mut self, pm: &mut Pixmap, g: &Geometry, cu: f32, v: f32) {
+        let dark = self.dark;
+        let stale =
+            !matches!(&self.remove_label, Some((f, d, _)) if *f == g.label_font && *d == dark);
+        if stale {
+            let color = if dark { (242, 242, 245) } else { (28, 28, 32) };
+            self.remove_label =
+                text::render("Remove", g.label_font, (200.0 * g.scale) as i32, color)
+                    .map(|p| (g.label_font, dark, p));
+        }
+        let Some((_, _, tp)) = &self.remove_label else {
+            return;
+        };
+        let padx = 9.0 * g.scale;
+        let pady = 3.5 * g.scale;
+        let pw = tp.width() as f32 + 2.0 * padx;
+        let ph = tp.height() as f32 + 2.0 * pady;
+        let rect = match g.edge {
+            Edge::Bottom => g.rect(cu - pw / 2.0, pw, v, ph),
+            _ => g.rect(cu - ph / 2.0, ph, v, pw),
+        };
+        let rect = RectF::new(
+            rect.x.round(),
+            rect.y.round(),
+            rect.w.round(),
+            rect.h.round(),
+        );
+        if let Some(p) = draw::rounded_rect(rect, 6.0 * g.scale) {
+            let bg = if dark {
+                rgba(44, 44, 48, 0.94)
+            } else {
+                rgba(250, 250, 252, 0.96)
+            };
+            draw::fill(pm, &p, bg);
+            draw::stroke(pm, &p, rgba(0, 0, 0, 0.12), 1.0);
+        }
+        pm.draw_pixmap(
+            (rect.x + padx).round() as i32,
+            (rect.y + pady).round() as i32,
+            tp.as_ref(),
+            &PixmapPaint::default(),
+            Transform::identity(),
+            None,
+        );
+    }
+
     /// Paints and pushes the result to the screen.
     pub fn render(&mut self, settings: &Settings) {
         let visible = !self.user_hidden
@@ -1430,6 +1711,85 @@ impl Dock {
     pub fn save_png(&self, path: &str) -> Result<(), String> {
         let pm = self.pixmap.as_ref().ok_or("nothing rendered")?;
         pm.save_png(path).map_err(|e| e.to_string())
+    }
+
+    /// Automated checks of the dock's own interaction logic (`--self-test`).
+    pub fn self_test(&mut self) -> Vec<(String, bool)> {
+        let mut out = Vec::new();
+        let Some(g) = self.geo.clone() else {
+            out.push(("dock geometry".into(), false));
+            return out;
+        };
+        let center = |d: &Dock, i: usize| -> Option<(f32, f32)> {
+            let (slots, _, _) = d.layout(&g);
+            let sl = slots.iter().find(|s| s.kind == SlotKind::Entry(i))?;
+            Some(g.point(sl.u0 + sl.len / 2.0, g.margin + g.pad + sl.len / 2.0))
+        };
+        // The Recycle Bin is drawn last, after a divider.
+        if let Some(b) = self.bin_index() {
+            let (slots, _, _) = self.layout(&g);
+            let last = slots.last().map(|s| s.kind);
+            let before = slots.len().checked_sub(2).map(|i| slots[i].kind);
+            out.push((
+                "Recycle Bin at the end".into(),
+                !self.trash_end
+                    || (last == Some(SlotKind::Entry(b)) && before == Some(SlotKind::Separator)),
+            ));
+        }
+        let first =
+            (0..self.entries.len()).find(|&i| self.entries[i].pinned && !self.entries[i].is_bin());
+        let third = (0..self.entries.len())
+            .filter(|&i| self.entries[i].pinned && !self.entries[i].is_bin())
+            .nth(2);
+        if let (Some(a), Some(c)) = (first, third) {
+            // Drag the first icon over the third: a reorder.
+            if let (Some((ax, ay)), Some((cx, cy))) = (center(self, a), center(self, c)) {
+                self.on_button_down(ax, ay);
+                self.on_mouse_move((ax + cx) / 2.0, (ay + cy) / 2.0);
+                self.on_mouse_move(cx, cy);
+                let r = self.on_button_up(cx, cy);
+                out.push((
+                    "drag to reorder".into(),
+                    matches!(r, Released::Reorder(0, to) if to >= 1),
+                ));
+            }
+            // Drag the first icon well away from the dock: a removal.
+            if let Some((ax, ay)) = center(self, a) {
+                let (au, av) = g.to_uv(ax, ay);
+                let (fx, fy) = g.point(au, av + g.s * 3.0);
+                self.on_button_down(ax, ay);
+                self.on_mouse_move(ax, ay);
+                self.on_mouse_move((ax + fx) / 2.0, (ay + fy) / 2.0);
+                self.on_mouse_move(fx, fy);
+                let outside = self.drag.as_ref().map(|d| d.outside).unwrap_or(false);
+                let painted = self.paint(&Settings::default());
+                let r = self.on_button_up(fx, fy);
+                out.push((
+                    "drag off the dock to remove".into(),
+                    outside && painted && matches!(r, Released::Remove(0)),
+                ));
+            }
+            // A plain click.
+            if let Some((ax, ay)) = center(self, a) {
+                self.on_button_down(ax, ay);
+                let r = self.on_button_up(ax, ay);
+                out.push(("click".into(), matches!(r, Released::Click(i) if i == a)));
+            }
+            // Attention: a flashing window makes its icon bounce until it is
+            // activated.
+            let fake = HWND(0x5eed as *mut _);
+            let saved = std::mem::take(&mut self.entries[a].windows);
+            self.entries[a].windows = vec![fake];
+            self.flash(fake);
+            let on = self.entries[a].attention;
+            self.activated(fake);
+            let off = !self.entries[a].attention;
+            self.entries[a].windows = saved;
+            out.push(("attention bounce".into(), on && off));
+        }
+        self.press = None;
+        self.drag = None;
+        out
     }
 
     /// Forces the hover state for previews.

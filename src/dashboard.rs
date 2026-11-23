@@ -79,6 +79,7 @@ enum Cmd {
     MoveTaskbar(BarEdge),
     DesktopIcons(bool),
     UndoSetup,
+    ImportPins,
     SheetAdd,
     Browse(bool),
     StartRename(usize),
@@ -1344,7 +1345,7 @@ fn page_behavior(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
         set(cmds, move |s| s.animations = m);
     }
     y = section(ui, ny + 8.0, "Running apps");
-    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW, ROW]);
     label(
         ui,
         rows[0],
@@ -1378,6 +1379,40 @@ fn page_behavior(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
         true,
     ) {
         set(cmds, move |s| s.show_running_apps = v);
+    }
+    label(
+        ui,
+        rows[2],
+        ROW,
+        "Window previews",
+        "Rest the pointer on an open app to see its windows",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("previews"),
+        right(),
+        rows[2] + ROW / 2.0,
+        s.window_previews,
+        true,
+    ) {
+        set(cmds, move |s| s.window_previews = v);
+    }
+    label(
+        ui,
+        rows[3],
+        ROW,
+        "Keep the Recycle Bin at the end",
+        "After a divider, like on a Mac. Drop files on it to delete them.",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("trashend"),
+        right(),
+        rows[3] + ROW / 2.0,
+        s.trash_at_end,
+        true,
+    ) {
+        set(cmds, move |s| s.trash_at_end = v);
     }
     y = section(ui, ny + 8.0, "Visibility");
     let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
@@ -1454,6 +1489,15 @@ fn page_apps(
         true,
     ) {
         cmds.push(Cmd::Browse(true));
+    }
+    if ui.button(
+        id("importpins"),
+        RectF::new(X0 + 400.0, y, 190.0, 32.0),
+        "Import from taskbar",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::ImportPins);
     }
     let y = y + 48.0;
     if items.is_empty() {
@@ -2313,6 +2357,25 @@ fn run_cmds(cmds: Vec<Cmd>) {
             }
             Cmd::MoveTaskbar(e) => crate::move_taskbar(e),
             Cmd::DesktopIcons(show) => crate::set_desktop_icons(show),
+            Cmd::ImportPins => {
+                let pins = apps::taskbar_pins();
+                if pins.is_empty() {
+                    util::info_box(
+                        hwnd(),
+                        "Berth didn't find any apps pinned to the Windows taskbar.",
+                    );
+                } else {
+                    let added = crate::add_items(pins, None);
+                    util::info_box(
+                        hwnd(),
+                        &if added == 0 {
+                            "Everything pinned to the taskbar is already on the dock.".to_string()
+                        } else {
+                            format!("Added {added} app(s) from the Windows taskbar.")
+                        },
+                    );
+                }
+            }
             Cmd::UndoSetup => {
                 if util::ask_box(
                     hwnd(),

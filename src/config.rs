@@ -81,6 +81,10 @@ pub struct Settings {
     pub animations: AnimationMode,
     pub show_running_indicators: bool,
     pub show_running_apps: bool,
+    /// Live previews of an app's windows when the pointer rests on its icon.
+    pub window_previews: bool,
+    /// Keep the Recycle Bin at the end of the dock, after a divider.
+    pub trash_at_end: bool,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
     /// Look for a new release on GitHub at start-up and twice a day, and
@@ -118,6 +122,8 @@ impl Default for Settings {
             animations: AnimationMode::System,
             show_running_indicators: true,
             show_running_apps: false,
+            window_previews: true,
+            trash_at_end: true,
             auto_hide: false,
             hide_in_fullscreen: true,
             check_updates_on_startup: true,
@@ -152,6 +158,12 @@ impl Settings {
             }
         }
         self.items.truncate(MAX_ITEMS);
+        if self.trash_at_end {
+            if let Some(i) = self.items.iter().position(|it| is_recycle_bin(&it.target)) {
+                let bin = self.items.remove(i);
+                self.items.push(bin);
+            }
+        }
     }
 
     /// Resets appearance and behavior while keeping the pinned apps.
@@ -168,6 +180,13 @@ impl Settings {
 }
 
 /// A fallback label derived from a path: the file name without extension.
+/// The shell location of the Recycle Bin.
+pub const RECYCLE_BIN: &str = "shell:RecycleBinFolder";
+
+pub fn is_recycle_bin(target: &str) -> bool {
+    target.trim().eq_ignore_ascii_case(RECYCLE_BIN)
+}
+
 pub fn display_name_from_target(target: &str) -> String {
     let t = target.trim_end_matches(['\\', '/']);
     let last = t.rsplit(['\\', '/', '!']).next().unwrap_or(t);

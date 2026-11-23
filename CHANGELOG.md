@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.0 — 2026-11-24
+
+- **New: window previews.** Rest the pointer on an open app to see a live thumbnail of each
+  of its windows, with its title. Click one to switch to it; the close button (or a
+  middle-click) closes it. Turn previews off in Dashboard > Behavior.
+- **New: drag an icon off the dock to remove it.** A "Remove" tag appears once it's far
+  enough away.
+- **New: the Recycle Bin stays at the end of the dock**, after a divider, like on a Mac.
+  Drop files on it to move them to the Recycle Bin. Its icon shows whether it's empty or full.
+- **New: icons bounce when an app needs attention** (when its window flashes on the
+  taskbar), until you switch to it, with an orange dot.
+- **New: start with your taskbar apps.** A new dock starts with the apps pinned to the
+  Windows taskbar; Dashboard > Apps > **Import from taskbar** adds them at any time.
+- **New look:** a rounder, glassier dock with a bright rim and a softer shadow.
+- The dock notices windows opening and closing straight away.
+- CI now also tests reordering, dragging off, clicking, attention bouncing and live thumbnails.
+
 ## 0.3.0 — 2026-11-24
 
 - **New: Recommended setup.** On first launch the dashboard opens a panel that sets Windows

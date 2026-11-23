@@ -217,6 +217,12 @@ impl IconCache {
             .map(|o| o.as_ref())
     }
 
+    /// Drops every cached size of one target (so it is loaded again).
+    pub fn forget(&mut self, target: &str) {
+        let t = target.to_ascii_lowercase();
+        self.map.retain(|(k, _), _| *k != t);
+    }
+
     pub fn clear(&mut self) {
         self.map.clear();
     }

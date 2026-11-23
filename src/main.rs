@@ -19,6 +19,7 @@ mod dock;
 mod draw;
 mod icons;
 mod picker;
+mod preview;
 mod system;
 mod taskbar;
 mod text;
@@ -77,7 +78,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "New: Recommended setup. Move the taskbar, hide it, and tidy the desktop in one click (Dashboard > General > Windows).";
+    "New: window previews, drag icons off the dock to remove them, a Mac-style Recycle Bin, and a glassier look.";
 
 pub struct App {
     pub settings: Settings,
@@ -539,6 +540,8 @@ fn open_entry(idx: usize, new_instance: bool) {
     }) else {
         return;
     };
+    with_app(|a| a.dock.clear_attention(idx));
+    crate::preview::hide();
     if !new_instance && !windows.is_empty() {
         apps::activate(&windows);
         return;
@@ -897,11 +900,9 @@ pub fn add_items(items: Vec<PinnedItem>, index: Option<usize>) -> usize {
             if a.settings.items.len() >= config::MAX_ITEMS {
                 break;
             }
-            if a.settings
-                .items
-                .iter()
-                .any(|x| x.target.eq_ignore_ascii_case(&it.target))
-            {
+            if a.settings.items.iter().any(|x| {
+                x.target.eq_ignore_ascii_case(&it.target) || x.name.eq_ignore_ascii_case(&it.name)
+            }) {
                 continue;
             }
             a.settings.items.insert(at, it);
@@ -919,6 +920,7 @@ pub fn add_items(items: Vec<PinnedItem>, index: Option<usize>) -> usize {
 // ----- window procedures ---------------------------------------------------
 
 static mut TASKBAR_CREATED: u32 = 0;
+static mut SHELL_HOOK: u32 = 0;
 
 thread_local! {
     static LAST_NOTIFIED: RefCell<String> = const { RefCell::new(String::new()) };
@@ -1024,6 +1026,38 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
             PostQuitMessage(0);
             LRESULT(0)
         }
+        _ if msg != 0 && msg == SHELL_HOOK => {
+            const HSHELL_WINDOWCREATED: usize = 1;
+            const HSHELL_WINDOWDESTROYED: usize = 2;
+            const HSHELL_WINDOWACTIVATED: usize = 4;
+            const HSHELL_RUDEAPPACTIVATED: usize = 0x8004;
+            const HSHELL_FLASH: usize = 0x8006;
+            let target = HWND(lp.0 as *mut _);
+            match wp.0 {
+                HSHELL_FLASH => {
+                    with_app(|a| {
+                        a.dock.refresh_running(&a.settings);
+                        a.dock.flash(target);
+                    });
+                }
+                HSHELL_WINDOWACTIVATED | HSHELL_RUDEAPPACTIVATED => {
+                    with_app(|a| a.dock.activated(target));
+                }
+                HSHELL_WINDOWCREATED | HSHELL_WINDOWDESTROYED => {
+                    with_app(|a| {
+                        let before = a.dock.entries.len();
+                        if a.dock.refresh_running(&a.settings) {
+                            if a.dock.entries.len() != before {
+                                a.dock.relayout(&a.settings);
+                            }
+                            a.dock.ensure_frame_timer();
+                        }
+                    });
+                }
+                _ => {}
+            }
+            LRESULT(0)
+        }
         _ if msg != 0 && msg == TASKBAR_CREATED => {
             // Explorer restarted: put the tray icon back and re-apply the
             // taskbar option.
@@ -1055,17 +1089,26 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             // Work out the click *before* releasing mouse capture: releasing
             // it sends WM_CAPTURECHANGED, which cancels any pending press.
             let shift = apps::shift_down();
-            let r = with_app(|a| {
-                let (click, reorder) = a.dock.on_button_up(x, y);
-                if let Some((from, to)) = reorder {
+            let r = with_app(|a| match a.dock.on_button_up(x, y) {
+                dock::Released::Click(i) => Some(i),
+                dock::Released::Reorder(from, to) => {
                     if from < a.settings.items.len() {
                         let it = a.settings.items.remove(from);
                         let to = to.min(a.settings.items.len());
                         a.settings.items.insert(to, it);
                         a.apply();
                     }
+                    None
                 }
-                click
+                dock::Released::Remove(from) => {
+                    if from < a.settings.items.len() {
+                        let it = a.settings.items.remove(from);
+                        log(&format!("removed from the dock by dragging: {}", it.target));
+                        a.apply();
+                    }
+                    None
+                }
+                dock::Released::Nothing => None,
             });
             let _ = ReleaseCapture();
             if let Some(Some(idx)) = r {
@@ -1086,6 +1129,7 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             LRESULT(0)
         }
         WM_RBUTTONUP => {
+            preview::hide();
             let idx = with_app(|a| {
                 a.dock.cancel_press();
                 a.dock.hit_test(x, y)
@@ -1122,6 +1166,18 @@ unsafe extern "system" fn dock_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM
             let mut pt = POINT::default();
             let _ = DragQueryPoint(hdrop, &mut pt);
             DragFinish(hdrop);
+            // Dropped on the Recycle Bin: delete (to the Recycle Bin).
+            let on_bin = with_app(|a| {
+                let hit = a.dock.hit_test(pt.x as f32, pt.y as f32);
+                hit.is_some() && hit == a.dock.bin_index()
+            })
+            .unwrap_or(false);
+            if on_bin {
+                if apps::recycle(None, &paths) {
+                    log(&format!("moved {} item(s) to the Recycle Bin", paths.len()));
+                }
+                return LRESULT(0);
+            }
             let index = with_app(|a| {
                 let pinned_before = a.dock.drop_index(pt.x as f32, pt.y as f32);
                 pinned_before.min(a.settings.items.len())
@@ -1336,7 +1392,7 @@ fn main() {
             config::LoadOutcome::Loaded(s) => s,
             config::LoadOutcome::FirstRun(mut s) => {
                 first_run = true;
-                s.items = apps::default_items();
+                s.items = apps::first_run_items();
                 if let Err(e) = config::save(&s) {
                     log(&format!("could not write first settings: {e}"));
                 }
@@ -1367,10 +1423,12 @@ fn main() {
     let hinst: HINSTANCE = unsafe { GetModuleHandleW(None).map(|h| h.into()).unwrap_or_default() };
     let (controller, dock_hwnd) = unsafe {
         TASKBAR_CREATED = RegisterWindowMessageW(w!("TaskbarCreated"));
+        SHELL_HOOK = RegisterWindowMessageW(w!("SHELLHOOK"));
         if !register_class(CONTROLLER_CLASS, Some(controller_proc), hinst)
             || !register_class(DOCK_CLASS, Some(dock_proc), hinst)
             || !dashboard::register(hinst)
             || !picker::register(hinst)
+            || !preview::register(hinst)
         {
             error_box(
                 None,
@@ -1422,7 +1480,11 @@ fn main() {
             }
         }
     };
-    unsafe { DragAcceptFiles(dock_hwnd, true) };
+    unsafe {
+        DragAcceptFiles(dock_hwnd, true);
+        // Window created/closed/activated/flashing notifications.
+        let _ = RegisterShellHookWindow(controller);
+    }
 
     let mut dock = Dock::new(dock_hwnd);
     dock.sync_items(&settings);
@@ -1628,6 +1690,25 @@ fn self_test(report: &str) -> i32 {
         system::system_animations_enabled()
     ));
     lines.push(format!("autostart: {:?}", autostart::state()));
+    let dock_checks = with_app(|a| {
+        let r = a.dock.self_test();
+        a.dock.sync_items(&a.settings);
+        a.dock.relayout(&a.settings);
+        r
+    })
+    .unwrap_or_default();
+    lines.push("dock interaction test:".into());
+    for (name, pass) in &dock_checks {
+        lines.push(format!(
+            "  dock {name}: {}",
+            if *pass { "ok" } else { "FAILED" }
+        ));
+        ok &= *pass;
+    }
+    ok &= !dock_checks.is_empty();
+    let (pv_line, pv_ok) = preview::self_test();
+    lines.push(pv_line);
+    ok &= pv_ok;
     let (dash_lines, dash_ok) = dashboard::self_test();
     lines.push("dashboard interaction test:".into());
     lines.extend(dash_lines);
