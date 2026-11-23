@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.5 — 2026-11-24
+
+- **Fixed:** with the taskbar on the left, top or right and **Hide the Windows taskbar** on,
+  the screen kept "jumping". Berth repeatedly asked Windows to give the taskbar's strip to
+  apps, Windows took it back, and every round resized all maximized windows. Berth no
+  longer changes the screen's work area at all (it also repairs one left over by 0.1.4).
+- **Fixed:** if Explorer keeps showing the taskbar again right after Berth hides it, Berth
+  now pauses for 30 seconds instead of fighting it.
+
 ## 0.1.4 — 2026-11-24
 
 - **Fixed:** **Hide the Windows taskbar** didn't work when the taskbar was on the left, top

@@ -78,9 +78,9 @@ pub fn set_autohide(on: bool) -> bool {
 // Windows only honours its auto-hide setting while the taskbar is at the
 // bottom. For the other edges Berth hides the taskbar windows itself and
 // shows them again when the pointer reaches that edge, the Start menu or
-// another shell pop-up is open, or the taskbar has keyboard focus. While
-// hidden, Berth also lets apps use the strip the taskbar normally reserves
-// (the monitor's work area); the original work area is put back afterwards.
+// another shell pop-up is open, or the taskbar has keyboard focus. The
+// strip the taskbar reserves stays reserved (Berth doesn't touch the work
+// area).
 
 use std::time::{Duration, Instant};
 
@@ -287,15 +287,21 @@ fn at_edge(b: &Bar, p: POINT) -> bool {
 pub static HIDER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// Berth's own taskbar hider. `tick` is called every ~50 ms while active.
+///
+/// It only shows and hides the taskbar windows. It never changes the
+/// screen's work area: asking Windows to give the taskbar's strip to apps
+/// made Explorer take it back again and again, and every round resized all
+/// maximized windows (the "jumping" in 0.1.4).
 #[derive(Default)]
 pub struct Hider {
     pub active: bool,
-    /// Original work areas, by the bar's window, to restore later.
-    saved: Vec<(HWND, RECT)>,
-    shown_by_us: bool,
     leave_since: Option<Instant>,
-    last_work_fix: Option<Instant>,
-    work_error_logged: bool,
+    /// When Berth last hid the taskbar.
+    hidden_at: Option<Instant>,
+    /// Times Explorer re-showed the taskbar right after Berth hid it.
+    fights: Vec<Instant>,
+    /// Berth backs off (leaves the taskbar visible) until this time.
+    paused_until: Option<Instant>,
 }
 
 impl Hider {
@@ -303,14 +309,16 @@ impl Hider {
         if !self.active {
             self.active = true;
             HIDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
-            self.shown_by_us = false;
             self.leave_since = None;
+            self.fights.clear();
+            self.paused_until = None;
+            repair_work_areas();
             util::log("Berth's taskbar hider turned on");
             self.tick();
         }
     }
 
-    /// Shows every taskbar again and restores the work areas.
+    /// Shows every taskbar again.
     pub fn disable(&mut self) {
         if !self.active {
             return;
@@ -321,14 +329,8 @@ impl Hider {
             unsafe {
                 let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
             }
-            let original = self
-                .saved
-                .iter()
-                .find(|(h, _)| *h == b.hwnd)
-                .map(|(_, r)| *r);
-            let _ = set_work_area(original.unwrap_or_else(|| work_with_bar(&b)));
         }
-        self.saved.clear();
+        repair_work_areas();
         util::log("Berth's taskbar hider turned off; taskbar shown");
     }
 
@@ -338,6 +340,13 @@ impl Hider {
         }
         let bars = bars();
         let Some(p) = cursor() else { return };
+        let now = Instant::now();
+        if let Some(t) = self.paused_until {
+            if now < t {
+                return;
+            }
+            self.paused_until = None;
+        }
         let popup = shell_popup_in_front(&bars);
         let over = bars
             .iter()
@@ -348,56 +357,64 @@ impl Hider {
         if want_visible {
             self.leave_since = None;
         }
-        let hide_now = !want_visible && {
-            let since = *self.leave_since.get_or_insert_with(Instant::now);
-            since.elapsed() >= Duration::from_millis(600)
-        };
+        let any_visible = bars
+            .iter()
+            .any(|b| unsafe { IsWindowVisible(b.hwnd).as_bool() });
 
-        for b in &bars {
-            if !self.saved.iter().any(|(h, _)| *h == b.hwnd) {
-                // Remember the real work area (with the taskbar) once.
-                let w = if b.work == b.monitor {
-                    work_with_bar(b)
-                } else {
-                    b.work
-                };
-                self.saved.push((b.hwnd, w));
-            }
-            let visible = unsafe { IsWindowVisible(b.hwnd).as_bool() };
-            let mut hidden = !visible;
-            if want_visible && !visible {
-                unsafe {
-                    let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-                }
-                hidden = false;
-            } else if hide_now && visible {
-                unsafe {
-                    let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
-                }
-                hidden = true;
-                // Free the strip right after hiding (Explorer recomputes the
-                // work area when its window changes).
-                self.last_work_fix = None;
-            }
-            // While hidden, let apps use the taskbar's strip. Explorer may
-            // take it back, so check again every half second.
-            if hidden && b.work != b.monitor {
-                let due = self
-                    .last_work_fix
-                    .map(|t| t.elapsed() >= Duration::from_millis(500))
-                    .unwrap_or(true);
-                if due {
-                    self.last_work_fix = Some(Instant::now());
-                    if let Err(e) = set_work_area(b.monitor) {
-                        if !self.work_error_logged {
-                            self.work_error_logged = true;
-                            util::log(&format!("couldn't give the taskbar's strip to apps: {e}"));
-                        }
+        // Explorer re-showed the taskbar right after Berth hid it: count it,
+        // and if it keeps happening, stop fighting for a while so the screen
+        // stays calm.
+        if !want_visible && any_visible {
+            if let Some(h) = self.hidden_at.take() {
+                if h.elapsed() < Duration::from_millis(1500) {
+                    self.fights
+                        .retain(|t| t.elapsed() < Duration::from_secs(15));
+                    self.fights.push(now);
+                    if self.fights.len() >= 4 {
+                        self.fights.clear();
+                        self.paused_until = Some(now + Duration::from_secs(30));
+                        util::log(
+                            "Explorer keeps showing the taskbar; Berth pauses hiding it for 30 s",
+                        );
+                        return;
                     }
                 }
             }
         }
-        self.shown_by_us = want_visible;
+
+        let hide_now = !want_visible && {
+            let since = *self.leave_since.get_or_insert(now);
+            since.elapsed() >= Duration::from_millis(600)
+        };
+
+        for b in &bars {
+            let visible = unsafe { IsWindowVisible(b.hwnd).as_bool() };
+            if want_visible && !visible {
+                unsafe {
+                    let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+                }
+            } else if hide_now && visible {
+                unsafe {
+                    let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
+                }
+                self.hidden_at = Some(now);
+            }
+        }
+    }
+}
+
+/// Undoes a work area left at full-screen size by Berth 0.1.4 (only if the
+/// taskbar's strip is currently not reserved).
+fn repair_work_areas() {
+    let native_autohide = is_autohide() == Some(true);
+    for b in bars() {
+        // With Windows' own auto-hide at the bottom, a full-size work area is correct.
+        if b.edge == BarEdge::Bottom && native_autohide {
+            continue;
+        }
+        if b.work == b.monitor {
+            let _ = set_work_area(work_with_bar(&b));
+        }
     }
 }
 
@@ -408,6 +425,6 @@ pub fn emergency_restore() {
         unsafe {
             let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
         }
-        let _ = set_work_area(work_with_bar(&b));
     }
+    repair_work_areas();
 }

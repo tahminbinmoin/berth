@@ -73,7 +73,8 @@ const TIMER_TASKBAR: usize = 13;
 const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
-const WHATS_NEW: &str = "Fixed: hiding the Windows taskbar now also works when the taskbar is on the left, top or right (Dashboard > General).";
+const WHATS_NEW: &str =
+    "Fixed: the screen no longer jumps while Berth hides a taskbar on the left, top or right.";
 
 pub struct App {
     pub settings: Settings,
@@ -1497,35 +1498,19 @@ fn self_test(report: &str) -> i32 {
                 wait(50);
                 h.tick();
             }
-            let after = taskbar::bars().first().copied();
             let hidden = unsafe { !IsWindowVisible(bar.hwnd).as_bool() };
-            let work_full = after.map(|b| b.work == b.monitor).unwrap_or(false);
-            if let Some(b) = after {
-                lines.push(format!(
-                    "  work area while hidden: {},{} {}x{}; monitor: {},{} {}x{}",
-                    b.work.left,
-                    b.work.top,
-                    b.work.right - b.work.left,
-                    b.work.bottom - b.work.top,
-                    b.monitor.left,
-                    b.monitor.top,
-                    b.monitor.right - b.monitor.left,
-                    b.monitor.bottom - b.monitor.top
-                ));
-            }
-            h.disable();
-            wait(700);
-            let shown = unsafe { IsWindowVisible(bar.hwnd).as_bool() };
-            let work_back = taskbar::bars()
+            let work_same = taskbar::bars()
                 .first()
                 .map(|b| b.work == work_before)
                 .unwrap_or(false);
+            h.disable();
+            wait(700);
+            let shown = unsafe { IsWindowVisible(bar.hwnd).as_bool() };
             lines.push(format!(
-                "own hider ({:?} taskbar): hidden: {hidden}; work area freed: {work_full}; shown again: {shown}; work area restored: {work_back}",
+                "own hider ({:?} taskbar): stayed hidden: {hidden}; work area untouched: {work_same}; shown again: {shown}",
                 bar.edge
             ));
-            // Freeing the work area is best-effort (Windows may keep it reserved).
-            ok &= hidden && shown && work_back;
+            ok &= hidden && work_same && shown;
         }
     }
     lines.push(format!("result: {}", if ok { "PASS" } else { "FAIL" }));
