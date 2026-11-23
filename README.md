@@ -70,18 +70,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.4 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.1.5 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.4-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.4-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.1.5-windows-x64.zip`**. Optionally also download
+   **`Berth-0.1.5-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.4-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.1.5-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -151,9 +151,10 @@ your taskbar is:
   allows auto-hide at the bottom, so Berth hides the taskbar itself. It shows it again
   when the pointer touches that edge of the screen, while Start, search, the system tray
   overflow or another shell pop-up is open, or while the taskbar has keyboard focus (Win+T).
-  It hides again shortly after you move away. Berth also asks Windows to let apps use the
-  strip the taskbar normally reserves; on some setups Windows keeps that strip reserved,
-  so an empty band may remain where the taskbar was.
+  It hides again shortly after you move away. Windows keeps the taskbar's strip reserved,
+  so maximized windows don't grow into it and an empty band remains where the taskbar was.
+  Berth deliberately leaves that alone: changing it made Windows resize every window
+  over and over.
 
 Either way:
 
@@ -257,8 +258,8 @@ Berth doesn't install anything else, write to system folders, or change system f
   each belongs to, the same information the taskbar uses. This stays in memory and is
   never saved or sent anywhere.
 - If you turn on **Hide the Windows taskbar**, Berth changes Windows' taskbar auto-hide
-  setting (bottom taskbar), or hides the taskbar and adjusts the screen work area itself
-  (other edges), while it runs, and puts everything back afterwards, as described above.
+  setting (bottom taskbar), or hides the taskbar window itself (other edges), while it
+  runs, and puts everything back afterwards, as described above.
 - The only registry change Berth makes is the optional launch-at-sign-in value described
   above.
 
@@ -266,7 +267,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.4 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.1.5 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -292,9 +293,9 @@ This is the first release. Please read these before relying on it.
   edge. If both share an edge, reaching it brings the taskbar up over the dock until you
   move away.
 - **Taskbar on the left, top or right:** there Berth shows and hides the taskbar instantly
-  (Windows' own slide animation is only available at the bottom). Freeing the taskbar's
-  strip for apps is best-effort: Windows sometimes keeps it reserved, leaving an empty
-  band where the taskbar was.
+  (Windows' own slide animation is only available at the bottom), and the taskbar's strip
+  stays reserved, so an empty band remains where it was. If Explorer keeps showing the
+  taskbar again on its own, Berth stops hiding it for 30 seconds rather than fight it.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard uses standard Windows controls in a light style, even when Windows is in
   dark mode. The dock itself follows the dark theme.
