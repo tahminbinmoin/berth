@@ -28,7 +28,7 @@ relevant part of `%LOCALAPPDATA%\Berth\berth.log` after checking it for private 
 | `src/icons.rs` | Shell icon loading and caching |
 | `src/config.rs` | Settings model, validation, load/save |
 | `src/autostart.rs` | Opt-in launch at sign-in (HKCU Run key) |
-| `src/taskbar.rs` | Optional Windows taskbar auto-hide (documented AppBar API), restored on exit |
+| `src/taskbar.rs` | Optional taskbar hiding: Windows auto-hide at the bottom, Berth's own hider elsewhere; restored on exit |
 | `src/updater.rs` | Update check, download, checksum verification and self-replacement |
 | `src/system.rs` | Theme, animation preference, monitors, full-screen detection |
 | `src/tray.rs` | Notification-area icon |

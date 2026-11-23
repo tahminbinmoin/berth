@@ -91,6 +91,9 @@ pub struct Settings {
     /// The taskbar auto-hide state before Berth changed it; restored when the
     /// option is turned off or Berth quits. `None` = Berth hasn't changed it.
     pub taskbar_autohide_before: Option<bool>,
+    /// True while Berth itself has the taskbar hidden (left/top/right
+    /// taskbars); used to show it again after an unexpected exit.
+    pub taskbar_hidden_by_berth: bool,
     pub items: Vec<PinnedItem>,
 }
 
@@ -115,6 +118,7 @@ impl Default for Settings {
             check_updates_on_startup: true,
             hide_taskbar: false,
             taskbar_autohide_before: None,
+            taskbar_hidden_by_berth: false,
             items: Vec::new(),
         }
     }
@@ -148,6 +152,7 @@ impl Settings {
         Settings {
             items: self.items.clone(),
             taskbar_autohide_before: self.taskbar_autohide_before,
+            taskbar_hidden_by_berth: self.taskbar_hidden_by_berth,
             ..Settings::default()
         }
     }

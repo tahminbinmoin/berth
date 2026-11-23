@@ -39,10 +39,9 @@ taskbar away until you need it), and you control all of it from a dashboard.
   disconnected, the dock moves to your main display.
 - **Behavior options:** auto-hide, hide while an app is full screen, and optionally show
   running apps that aren't pinned.
-- **Hide the Windows taskbar (optional):** Berth can turn on Windows' own taskbar
-  auto-hide while it runs. The taskbar slides back in whenever your pointer reaches its
-  edge, wherever it is, and your previous setting is restored when you turn this off or
-  quit Berth.
+- **Hide the Windows taskbar (optional):** Berth can keep the taskbar out of the way
+  while it runs, on whichever edge it sits. It comes back when your pointer reaches that
+  edge, and everything is put back when you turn this off or quit Berth.
 - **Runs in the background:** an icon in the notification area (near the clock) opens the
   dashboard. Berth can start automatically when you sign in to Windows; you choose this on
   first launch and can change it at any time.
@@ -71,18 +70,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.3 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.1.4 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.3-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.3-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.1.4-windows-x64.zip`**. Optionally also download
+   **`Berth-0.1.4-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.3-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.1.4-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -142,20 +141,32 @@ change any taskbar setting. If the dock overlaps something you need, move it to 
 edge, turn on auto-hide, or hide it from the tray menu.
 
 **Optional: hide the taskbar while Berth runs.** Tick **Dashboard > General > Hide the
-Windows taskbar automatically while Berth is running**. Berth then switches on Windows'
-own **Automatically hide the taskbar** setting (the same one as in Settings >
-Personalization > Taskbar > Taskbar behaviors). The taskbar slides back in whenever you
-move the pointer to its edge (top, bottom, left or right) on any display, and the
-**Start** key, **Win+T** and notifications work as usual.
+Windows taskbar automatically while Berth is running**. How it works depends on where
+your taskbar is:
 
-- Berth remembers whether auto-hide was already on and puts that back when you untick the
-  option or quit Berth. It also restores it when you sign out or shut down, and turns
-  it on again the next time Berth starts.
-- If Berth ever stops unexpectedly while this is on, the taskbar simply stays on
-  auto-hide (still usable). Start Berth again and quit it, or untick the option, to put
-  your setting back. You can always change it yourself in Windows Settings.
-- Berth uses the documented Windows shell API for this. It never hides the taskbar
-  window itself or modifies system files.
+- **Taskbar at the bottom:** Berth switches on Windows' own **Automatically hide the
+  taskbar** setting (the same one as in Settings > Personalization > Taskbar > Taskbar
+  behaviors). Windows slides the taskbar in when the pointer reaches the bottom edge.
+- **Taskbar on the left, top or right** (possible on newer Windows 11 builds): Windows only
+  allows auto-hide at the bottom, so Berth hides the taskbar itself. It shows it again
+  when the pointer touches that edge of the screen, while Start, search, the system tray
+  overflow or another shell pop-up is open, or while the taskbar has keyboard focus (Win+T).
+  It hides again shortly after you move away. Berth also asks Windows to let apps use the
+  strip the taskbar normally reserves; on some setups Windows keeps that strip reserved,
+  so an empty band may remain where the taskbar was.
+
+Either way:
+
+- Berth remembers your previous state and puts it back when you untick the option or quit
+  Berth. It also restores it when you sign out or shut down, and applies it again the next
+  time Berth starts.
+- The **Start** key, Win+T and notifications keep working.
+- If Berth ever stops unexpectedly, at the bottom edge the taskbar stays on Windows'
+  auto-hide (still usable). On other edges it may stay hidden until you start Berth
+  again, which shows it straight away. Signing out or restarting Windows also brings it
+  back.
+- Berth uses documented Windows APIs for this. It doesn't modify system files or
+  Explorer.
 
 **To quit Berth:** right-click the Berth icon in the notification area (you may need to
 click the **^** arrow next to the clock) and choose **Quit Berth**. You can also use
@@ -221,7 +232,8 @@ Berth doesn't install anything else, write to system folders, or change system f
 | Berth says its settings couldn't be read | Berth moved the unreadable file aside (named `settings.broken-<time>.json`) and started with defaults. Nothing else is needed. |
 | "Couldn't check for updates" | Check your internet connection and try again later. GitHub limits how often a network can query it without signing in, so very frequent checks can be refused for a while. You can always update manually from the Releases page. |
 | "Berth can't replace its own file" | Berth is in a folder you can't write to (such as Program Files). Quit Berth, move the folder somewhere in your user profile, start it from there, then update. |
-| The taskbar stays hidden after Berth closed | Berth was probably stopped unexpectedly. Start Berth and quit it from the tray menu, or turn off **Automatically hide the taskbar** in Windows Settings > Personalization > Taskbar > Taskbar behaviors. |
+| The taskbar stays hidden after Berth closed | Berth was probably stopped unexpectedly. Start Berth again (it shows the taskbar immediately) and quit it from the tray menu. For a bottom taskbar you can also turn off **Automatically hide the taskbar** in Windows Settings > Personalization > Taskbar > Taskbar behaviors. Signing out also brings it back. |
+| The taskbar doesn't hide | Make sure **Hide the Windows taskbar** is ticked on the General page. If the pointer is near the taskbar's edge, or Start or another shell pop-up is open, Berth keeps it visible on purpose. |
 | Launch at sign-in doesn't work | Check **Windows Settings > Apps > Startup** and make sure **Berth** is switched on. If you moved `Berth.exe`, start it once from its new location. |
 | Something else | Open **Dashboard > About > Open log folder** and look at `berth.log`. Please include it (after checking it for anything private) when you [open an issue](https://github.com/tahminbinmoin/berth/issues). |
 
@@ -245,7 +257,8 @@ Berth doesn't install anything else, write to system folders, or change system f
   each belongs to, the same information the taskbar uses. This stays in memory and is
   never saved or sent anywhere.
 - If you turn on **Hide the Windows taskbar**, Berth changes Windows' taskbar auto-hide
-  setting while it runs and puts it back afterwards, as described above.
+  setting (bottom taskbar), or hides the taskbar and adjusts the screen work area itself
+  (other edges), while it runs, and puts everything back afterwards, as described above.
 - The only registry change Berth makes is the optional launch-at-sign-in value described
   above.
 
@@ -253,7 +266,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.3 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.1.4 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -275,9 +288,13 @@ This is the first release. Please read these before relying on it.
 - **Auto-hide on the taskbar's edge:** with the taskbar at the bottom and always visible,
   revealing a bottom dock means resting the pointer at the very bottom edge (on the
   taskbar) for a moment.
-- **Hidden taskbar and a bottom dock:** when Berth hides the taskbar, the dock moves down
-  to the screen edge. Moving the pointer to the very bottom brings the taskbar up over the
-  dock until you move away. Windows applies taskbar auto-hide to all displays at once.
+- **Hidden taskbar and the dock:** when the taskbar is hidden, the dock moves to the screen
+  edge. If both share an edge, reaching it brings the taskbar up over the dock until you
+  move away.
+- **Taskbar on the left, top or right:** there Berth shows and hides the taskbar instantly
+  (Windows' own slide animation is only available at the bottom). Freeing the taskbar's
+  strip for apps is best-effort: Windows sometimes keeps it reserved, leaving an empty
+  band where the taskbar was.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard uses standard Windows controls in a light style, even when Windows is in
   dark mode. The dock itself follows the dark theme.
