@@ -74,7 +74,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "Apps now get the full screen while Berth hides a taskbar on the left, top or right, and the taskbar wipes in when you reach the edge.";
+    "Fixed: the dock shows up again over maximized apps. Only real full-screen apps hide it.";
 
 pub struct App {
     pub settings: Settings,

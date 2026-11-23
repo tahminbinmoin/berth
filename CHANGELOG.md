@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.7 — 2026-11-24
+
+- **Fixed:** the dock stayed hidden while a maximized app was in front. Since maximized
+  windows can now fill the whole screen (when Berth hides the taskbar), Berth mistook
+  them for full-screen apps. Only true full-screen apps (games, videos, presentations)
+  hide the dock now.
+
 ## 0.1.6 — 2026-11-24
 
 - **Improved:** with the taskbar on the left, top or right, apps now get the full screen
