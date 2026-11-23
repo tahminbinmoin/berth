@@ -185,6 +185,11 @@ pub fn fullscreen_app_on(monitor: HMONITOR, own: &[HWND]) -> bool {
             return false;
         }
         let mut r = RECT::default();
+        // A maximized window is not "full screen", even when it fills the
+        // whole display (e.g. while Berth hides the taskbar).
+        if windows::Win32::UI::WindowsAndMessaging::IsZoomed(fg).as_bool() {
+            return false;
+        }
         if GetWindowRect(fg, &mut r).is_err() {
             return false;
         }
