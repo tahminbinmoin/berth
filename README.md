@@ -151,8 +151,9 @@ your taskbar is:
   allows auto-hide at the bottom, so Berth hides the taskbar itself. It shows it again
   when the pointer touches that edge of the screen, while Start, search, the system tray
   overflow or another shell pop-up is open, or while the taskbar has keyboard focus (Win+T).
-  It hides again shortly after you move away. While hidden, apps can use the strip the
-  taskbar normally reserves.
+  It hides again shortly after you move away. Berth also asks Windows to let apps use the
+  strip the taskbar normally reserves; on some setups Windows keeps that strip reserved,
+  so an empty band may remain where the taskbar was.
 
 Either way:
 
@@ -291,9 +292,9 @@ This is the first release. Please read these before relying on it.
   edge. If both share an edge, reaching it brings the taskbar up over the dock until you
   move away.
 - **Taskbar on the left, top or right:** there Berth shows and hides the taskbar instantly
-  (Windows' own slide animation is only available at the bottom). Explorer occasionally
-  takes back the strip the taskbar reserves, and Berth frees it again within about two
-  seconds.
+  (Windows' own slide animation is only available at the bottom). Freeing the taskbar's
+  strip for apps is best-effort: Windows sometimes keeps it reserved, leaving an empty
+  band where the taskbar was.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard uses standard Windows controls in a light style, even when Windows is in
   dark mode. The dock itself follows the dark theme.

@@ -183,15 +183,16 @@ pub fn main_edge() -> Option<BarEdge> {
     bars().first().map(|b| b.edge)
 }
 
-fn set_work_area(r: RECT) {
+fn set_work_area(r: RECT) -> Result<(), String> {
     let mut r = r;
     unsafe {
-        let _ = SystemParametersInfoW(
+        SystemParametersInfoW(
             SPI_SETWORKAREA,
             0,
             Some(&mut r as *mut RECT as *mut _),
             SPIF_SENDCHANGE,
-        );
+        )
+        .map_err(|e| e.message().to_string())
     }
 }
 
@@ -294,6 +295,7 @@ pub struct Hider {
     shown_by_us: bool,
     leave_since: Option<Instant>,
     last_work_fix: Option<Instant>,
+    work_error_logged: bool,
 }
 
 impl Hider {
@@ -324,7 +326,7 @@ impl Hider {
                 .iter()
                 .find(|(h, _)| *h == b.hwnd)
                 .map(|(_, r)| *r);
-            set_work_area(original.unwrap_or_else(|| work_with_bar(&b)));
+            let _ = set_work_area(original.unwrap_or_else(|| work_with_bar(&b)));
         }
         self.saved.clear();
         util::log("Berth's taskbar hider turned off; taskbar shown");
@@ -386,7 +388,12 @@ impl Hider {
                     .unwrap_or(true);
                 if due {
                     self.last_work_fix = Some(Instant::now());
-                    set_work_area(b.monitor);
+                    if let Err(e) = set_work_area(b.monitor) {
+                        if !self.work_error_logged {
+                            self.work_error_logged = true;
+                            util::log(&format!("couldn't give the taskbar's strip to apps: {e}"));
+                        }
+                    }
                 }
             }
         }
@@ -401,6 +408,6 @@ pub fn emergency_restore() {
         unsafe {
             let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
         }
-        set_work_area(work_with_bar(&b));
+        let _ = set_work_area(work_with_bar(&b));
     }
 }

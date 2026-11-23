@@ -5,8 +5,9 @@
 - **Fixed:** **Hide the Windows taskbar** didn't work when the taskbar was on the left, top
   or right. Windows only allows its own auto-hide at the bottom, so for other edges Berth
   now hides the taskbar itself and shows it when the pointer reaches that edge (or while
-  Start, search or another shell pop-up is open). The freed strip is given to apps while
-  hidden, and everything is restored on quit, sign-out, or when the option is turned off.
+  Start, search or another shell pop-up is open). Berth also tries to give the taskbar's
+  strip to apps while it's hidden (best-effort). Everything is restored on quit, sign-out,
+  or when the option is turned off.
   If Berth stops unexpectedly, starting it again shows the taskbar immediately.
 
 ## 0.1.3 — 2026-11-24
