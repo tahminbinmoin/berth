@@ -683,17 +683,13 @@ impl<'a> Ui<'a> {
         } else {
             c(255, 255, 255)
         };
+        let ring = if self.p.dark {
+            rgba(0, 0, 0, 0.25)
+        } else {
+            rgba(0, 0, 0, 0.14)
+        };
+        self.circle(tx, cy, 11.0, ring);
         self.circle(tx, cy, 10.0, outer);
-        self.circle(
-            tx,
-            cy,
-            10.5,
-            if self.p.dark {
-                rgba(0, 0, 0, 0.0)
-            } else {
-                rgba(0, 0, 0, 0.0)
-            },
-        );
         let inner = if self.is_pressed(wid) {
             5.0
         } else if hov {

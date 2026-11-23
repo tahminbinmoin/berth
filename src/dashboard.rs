@@ -262,6 +262,101 @@ pub fn render_to_files(dir: &str) -> Result<usize, String> {
     Ok(n)
 }
 
+// ----- automated interaction test (self-test) ------------------------------
+
+fn sim(x: f32, y: f32, down: bool, pressed: bool, released: bool) {
+    with_dash(|d| {
+        let s = d.scale();
+        d.input.mx = x * s;
+        d.input.my = y * s;
+        d.input.inside = true;
+        d.input.down = down;
+        d.input.pressed = pressed;
+        d.input.released = released;
+    });
+    frame();
+}
+
+fn sim_click(x: f32, y: f32) {
+    sim(x, y, false, false, false);
+    sim(x, y, true, true, false);
+    sim(x, y, false, false, true);
+    frame();
+}
+
+fn sim_key(k: Key) {
+    with_dash(|d| d.input.key = Some(k));
+    frame();
+    frame();
+}
+
+/// Drives the dashboard with simulated input and checks the results.
+/// Returns (report lines, all passed). Settings are not saved in tests.
+pub fn self_test() -> (Vec<String>, bool) {
+    let mut lines = Vec::new();
+    let mut ok = true;
+    open_page_inner(0, false);
+    let mut check = |name: &str, pass: bool, lines: &mut Vec<String>| {
+        lines.push(format!(
+            "  dashboard {name}: {}",
+            if pass { "ok" } else { "FAILED" }
+        ));
+        ok &= pass;
+    };
+    // Sidebar navigation.
+    sim_click(100.0, 92.0 + 40.0 + 18.0);
+    check(
+        "nav to Appearance",
+        with_dash(|d| d.page) == Some(1),
+        &mut lines,
+    );
+    sim_click(100.0, 92.0 + 18.0);
+    check(
+        "nav to General",
+        with_dash(|d| d.page) == Some(0),
+        &mut lines,
+    );
+    // Toggle "Show the dock" (General > Dock, first row).
+    let before = with_app(|a| a.dock.user_hidden).unwrap_or(false);
+    sim_click(right() - 20.0, 242.0 + ROW / 2.0);
+    let after = with_app(|a| a.dock.user_hidden).unwrap_or(false);
+    check("toggle Show the dock", after != before, &mut lines);
+    sim_click(right() - 20.0, 242.0 + ROW / 2.0);
+    // Dropdown by keyboard: open Position, choose the next item.
+    sim_click(right() - 120.0, 242.0 + 2.0 * ROW + 34.0);
+    let opened = with_dash(|d| d.st.dropdown.is_some()).unwrap_or(false);
+    sim_key(Key::Down);
+    sim_key(Key::Enter);
+    let pos = with_app(|a| a.settings.position).unwrap_or(Edge::Bottom);
+    check("dropdown Position", opened && pos == Edge::Left, &mut lines);
+    with_app(|a| {
+        a.settings.position = Edge::Bottom;
+        a.apply();
+    });
+    // Slider drag: Appearance > Icon size to about the middle.
+    sim_click(100.0, 92.0 + 40.0 + 18.0);
+    let (sx, sy, sw) = (right() - 220.0, 310.0 + ROW / 2.0, 220.0);
+    sim(sx + 10.0, sy, false, false, false);
+    sim(sx + 10.0, sy, true, true, false);
+    sim(sx + sw / 2.0, sy, true, false, false);
+    sim(sx + sw / 2.0, sy, false, false, true);
+    let size = with_app(|a| a.settings.icon_size).unwrap_or(0);
+    check(
+        &format!("slider Icon size (now {size})"),
+        (70..=82).contains(&size),
+        &mut lines,
+    );
+    // Keyboard: Tab focuses something, Escape closes nothing harmful.
+    sim_key(Key::Tab);
+    check(
+        "keyboard focus",
+        with_dash(|d| d.st.focus.is_some()).unwrap_or(false),
+        &mut lines,
+    );
+    close();
+    (lines, ok)
+}
+
 fn open_page_inner(page: usize, show: bool) {
     if let Some(h) = hwnd() {
         with_dash(|d| d.page = page.min(PAGES.len() - 1));
@@ -1278,7 +1373,7 @@ fn page_apps(
         if ui.icon_button(idx("down", i), b(1), '\u{E70D}', i + 1 < items.len()) {
             cmds.push(Cmd::Move(i, false));
         }
-        if ui.icon_button(idx("rename", i), b(2), '\u{E8AC}', true) {
+        if ui.icon_button(idx("rename", i), b(2), '\u{E70F}', true) {
             cmds.push(Cmd::StartRename(i));
         }
         if ui.icon_button(idx("remove", i), b(3), '\u{E74D}', true) {

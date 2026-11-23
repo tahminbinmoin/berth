@@ -1489,6 +1489,10 @@ fn self_test(report: &str) -> i32 {
         system::system_animations_enabled()
     ));
     lines.push(format!("autostart: {:?}", autostart::state()));
+    let (dash_lines, dash_ok) = dashboard::self_test();
+    lines.push("dashboard interaction test:".into());
+    lines.extend(dash_lines);
+    ok &= dash_ok;
     // CI only (it briefly changes the taskbar): exercise the taskbar option
     // the same way the dashboard does, then put everything back.
     if std::env::var("BERTH_TEST_TASKBAR").as_deref() == Ok("1") {
