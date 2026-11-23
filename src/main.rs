@@ -74,7 +74,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "Fixed: the screen no longer jumps while Berth hides a taskbar on the left, top or right.";
+    "Apps now get the full screen while Berth hides a taskbar on the left, top or right, and the taskbar wipes in when you reach the edge.";
 
 pub struct App {
     pub settings: Settings,
@@ -164,7 +164,13 @@ impl App {
     }
 
     fn taskbar_tick(&mut self) {
-        self.hider.tick();
+        let was = self.hider.animating;
+        self.hider.tick(self.dock.animate);
+        if self.hider.animating != was {
+            // ~60 fps while the taskbar animates, 20 fps otherwise.
+            let ms = if self.hider.animating { 15 } else { 50 };
+            unsafe { SetTimer(Some(self.controller), TIMER_TASKBAR, ms, None) };
+        }
         self.taskbar_ticks = self.taskbar_ticks.wrapping_add(1);
         if self.taskbar_ticks % 40 == 0 {
             self.sync_taskbar();
@@ -1022,12 +1028,6 @@ fn parse_args() -> Args {
             "--startup" => a.startup = true,
             "--reset-settings" => a.reset = true,
             "--after-update" => a.after_update = it.next().and_then(|p| p.parse().ok()),
-            "--taskbar-experiment" => {
-                let report = it.next().unwrap_or_else(|| "taskbar-experiment.txt".into());
-                let lines = taskbar::experiment();
-                let _ = std::fs::write(report, lines.join("\r\n"));
-                std::process::exit(0);
-            }
             "--self-test" => {
                 a.self_test = Some(it.next().unwrap_or_else(|| "berth-self-test.txt".into()))
             }
@@ -1502,21 +1502,21 @@ fn self_test(report: &str) -> i32 {
             // Tick like the running app does for about 3 seconds.
             for _ in 0..60 {
                 wait(50);
-                h.tick();
+                h.tick(true);
             }
-            let hidden = unsafe { !IsWindowVisible(bar.hwnd).as_bool() };
-            let work_same = taskbar::bars()
-                .first()
-                .map(|b| b.work == work_before)
-                .unwrap_or(false);
+            let now = taskbar::bars().first().copied();
+            let clipped = taskbar::is_clipped(bar.hwnd);
+            let full = now.map(|b| b.work == b.monitor).unwrap_or(false);
             h.disable();
             wait(700);
-            let shown = unsafe { IsWindowVisible(bar.hwnd).as_bool() };
+            let back = taskbar::bars().first().copied();
+            let unclipped = !taskbar::is_clipped(bar.hwnd);
+            let restored = back.map(|b| b.work == work_before).unwrap_or(false);
             lines.push(format!(
-                "own hider ({:?} taskbar): stayed hidden: {hidden}; work area untouched: {work_same}; shown again: {shown}",
+                "own hider ({:?} taskbar): clipped: {clipped}; strip given to apps: {full}; shown again: {unclipped}; strip restored: {restored}",
                 bar.edge
             ));
-            ok &= hidden && work_same && shown;
+            ok &= clipped && full && unclipped && restored;
         }
     }
     lines.push(format!("result: {}", if ok { "PASS" } else { "FAIL" }));

@@ -48,12 +48,6 @@ jobs:
           Get-Content self-test.txt
           if ($p.ExitCode -ne 0) { throw "self-test failed with exit code $($p.ExitCode)" }
 
-      - name: Taskbar work-area experiment
-        shell: pwsh
-        run: |
-          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--taskbar-experiment', "$PWD\exp.txt" -Wait -PassThru
-          Get-Content exp.txt
-
       - name: Render preview image
         shell: pwsh
         run: |

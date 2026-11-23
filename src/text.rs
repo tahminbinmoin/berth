@@ -3,19 +3,40 @@
 //! an alpha mask, so labels blend cleanly over the translucent dock.
 
 use tiny_skia::{IntSize, Pixmap};
-use windows::core::w;
 use windows::Win32::Foundation::COLORREF;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateDIBSection, CreateFontW, DeleteDC, DeleteObject, DrawTextW,
     SelectObject, SetBkMode, SetTextColor, ANTIALIASED_QUALITY, BITMAPINFO, BITMAPINFOHEADER,
     BI_RGB, CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DEFAULT_PITCH, DIB_RGB_COLORS, DT_CALCRECT,
-    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, FF_SWISS, FW_MEDIUM, HGDIOBJ, OUT_TT_PRECIS,
-    TRANSPARENT,
+    DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_WORDBREAK, FF_SWISS, FW_MEDIUM, HGDIOBJ,
+    OUT_TT_PRECIS, TRANSPARENT,
 };
 
 /// Renders `text` in the given color; returns a premultiplied pixmap.
 pub fn render(text: &str, font_px: i32, max_width: i32, rgb: (u8, u8, u8)) -> Option<Pixmap> {
+    render_with(
+        text,
+        "Segoe UI Variable Text",
+        FW_MEDIUM.0 as i32,
+        font_px,
+        max_width,
+        false,
+        rgb,
+    )
+}
+
+/// Renders text with a given font face and weight. With `wrap`, the text is
+/// word-wrapped to `max_width`; otherwise it is one line, cut with "…".
+pub fn render_with(
+    text: &str,
+    face: &str,
+    weight: i32,
+    font_px: i32,
+    max_width: i32,
+    wrap: bool,
+    rgb: (u8, u8, u8),
+) -> Option<Pixmap> {
     if text.is_empty() {
         return None;
     }
@@ -29,7 +50,7 @@ pub fn render(text: &str, font_px: i32, max_width: i32, rgb: (u8, u8, u8)) -> Op
             0,
             0,
             0,
-            FW_MEDIUM.0 as i32,
+            weight,
             0,
             0,
             0,
@@ -38,7 +59,7 @@ pub fn render(text: &str, font_px: i32, max_width: i32, rgb: (u8, u8, u8)) -> Op
             CLIP_DEFAULT_PRECIS,
             ANTIALIASED_QUALITY,
             (DEFAULT_PITCH.0 | FF_SWISS.0) as u32,
-            w!("Segoe UI Variable Text"),
+            &windows::core::HSTRING::from(face),
         );
         let old_font = SelectObject(dc, HGDIOBJ(font.0));
         let mut wtext: Vec<u16> = text.encode_utf16().collect();
@@ -48,12 +69,12 @@ pub fn render(text: &str, font_px: i32, max_width: i32, rgb: (u8, u8, u8)) -> Op
             right: max_width,
             bottom: font_px * 2,
         };
-        DrawTextW(
-            dc,
-            &mut wtext,
-            &mut measure,
-            DT_CALCRECT | DT_SINGLELINE | DT_NOPREFIX,
-        );
+        let line_flags = if wrap {
+            DT_WORDBREAK | DT_NOPREFIX
+        } else {
+            DT_SINGLELINE | DT_NOPREFIX
+        };
+        DrawTextW(dc, &mut wtext, &mut measure, DT_CALCRECT | line_flags);
         let w = (measure.right - measure.left).clamp(1, max_width) + 2;
         let h = (measure.bottom - measure.top).max(1) + 2;
 
@@ -82,12 +103,12 @@ pub fn render(text: &str, font_px: i32, max_width: i32, rgb: (u8, u8, u8)) -> Op
                     right: w - 1,
                     bottom: h - 1,
                 };
-                DrawTextW(
-                    dc,
-                    &mut wtext,
-                    &mut r,
-                    DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS,
-                );
+                let draw_flags = if wrap {
+                    line_flags
+                } else {
+                    line_flags | DT_END_ELLIPSIS
+                };
+                DrawTextW(dc, &mut wtext, &mut r, draw_flags);
                 let src = std::slice::from_raw_parts(bits as *const u8, (w * h * 4) as usize);
                 let mut out = vec![0u8; src.len()];
                 for (o, s) in out.chunks_exact_mut(4).zip(src.chunks_exact(4)) {

@@ -78,9 +78,8 @@ pub fn set_autohide(on: bool) -> bool {
 // Windows only honours its auto-hide setting while the taskbar is at the
 // bottom. For the other edges Berth hides the taskbar windows itself and
 // shows them again when the pointer reaches that edge, the Start menu or
-// another shell pop-up is open, or the taskbar has keyboard focus. The
-// strip the taskbar reserves stays reserved (Berth doesn't touch the work
-// area).
+// another shell pop-up is open, or the taskbar has keyboard focus. See
+// `Hider` for how this avoids fighting Explorer.
 
 use std::time::{Duration, Instant};
 
@@ -95,7 +94,7 @@ use windows::Win32::System::Threading::{
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowExW, GetClassNameW, GetCursorPos, GetForegroundWindow, GetWindowRect,
     GetWindowThreadProcessId, IsWindowVisible, ShowWindowAsync, SystemParametersInfoW,
-    SPIF_SENDCHANGE, SPI_SETWORKAREA, SW_HIDE, SW_SHOWNOACTIVATE,
+    SPIF_SENDCHANGE, SPI_SETWORKAREA, SW_SHOWNOACTIVATE,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -286,22 +285,74 @@ fn at_edge(b: &Bar, p: POINT) -> bool {
 /// Set while Berth's own hider has taskbars hidden (read by the panic hook).
 pub static HIDER_ACTIVE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
-/// Berth's own taskbar hider. `tick` is called every ~50 ms while active.
+fn set_region(hwnd: HWND, b: &Bar, t: f32) {
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
+    unsafe {
+        if t >= 0.999 {
+            let _ = SetWindowRgn(hwnd, None, true);
+            return;
+        }
+        let (w, h) = (b.rect.right - b.rect.left, b.rect.bottom - b.rect.top);
+        let (dw, dh) = ((w as f32 * t).round() as i32, (h as f32 * t).round() as i32);
+        let rgn = match b.edge {
+            BarEdge::Left => CreateRectRgn(0, 0, dw, h),
+            BarEdge::Right => CreateRectRgn(w - dw, 0, w, h),
+            BarEdge::Top => CreateRectRgn(0, 0, w, dh),
+            BarEdge::Bottom => CreateRectRgn(0, h - dh, w, h),
+        };
+        let _ = SetWindowRgn(hwnd, Some(rgn), true);
+    }
+}
+
+/// True if the window currently has a window region (Berth's clip).
+fn has_region(hwnd: HWND) -> bool {
+    use windows::Win32::Graphics::Gdi::{CreateRectRgn, DeleteObject, GetWindowRgn, HGDIOBJ};
+    unsafe {
+        let tmp = CreateRectRgn(0, 0, 0, 0);
+        let kind = GetWindowRgn(hwnd, tmp);
+        let _ = DeleteObject(HGDIOBJ(tmp.0));
+        kind.0 != 0 // 0 = ERROR (no region)
+    }
+}
+
+fn set_work_area_quiet(r: RECT) -> bool {
+    let mut r = r;
+    unsafe {
+        SystemParametersInfoW(
+            SPI_SETWORKAREA,
+            0,
+            Some(&mut r as *mut RECT as *mut _),
+            Default::default(),
+        )
+        .is_ok()
+    }
+}
+
+struct BarState {
+    hwnd: HWND,
+    /// 0 = hidden, 1 = fully shown.
+    shown: f32,
+    target: f32,
+    applied: f32,
+}
+
+/// Berth's own taskbar hider, used when the taskbar is on the left, top or
+/// right (Windows only allows its own auto-hide at the bottom).
 ///
-/// It only shows and hides the taskbar windows. It never changes the
-/// screen's work area: asking Windows to give the taskbar's strip to apps
-/// made Explorer take it back again and again, and every round resized all
-/// maximized windows (the "jumping" in 0.1.4).
+/// Hiding the taskbar window makes Explorer reserve its strip again and
+/// resize every window, so Berth never hides it. The taskbar stays "shown"
+/// for Explorer but is clipped to an empty window region (invisible and
+/// click-through); revealing it grows the region out from the screen edge.
+/// The strip is given to apps by updating the work area *without* a
+/// system-wide broadcast (a broadcast makes Explorer take it straight back),
+/// and maximized windows are resized to fill it.
 #[derive(Default)]
 pub struct Hider {
     pub active: bool,
+    bars: Vec<BarState>,
     leave_since: Option<Instant>,
-    /// When Berth last hid the taskbar.
-    hidden_at: Option<Instant>,
-    /// Times Explorer re-showed the taskbar right after Berth hid it.
-    fights: Vec<Instant>,
-    /// Berth backs off (leaves the taskbar visible) until this time.
-    paused_until: Option<Instant>,
+    last_work_fix: Option<Instant>,
+    pub animating: bool,
 }
 
 impl Hider {
@@ -309,124 +360,151 @@ impl Hider {
         if !self.active {
             self.active = true;
             HIDER_ACTIVE.store(true, std::sync::atomic::Ordering::Relaxed);
-            self.leave_since = None;
-            self.fights.clear();
-            self.paused_until = None;
-            repair_work_areas();
+            self.leave_since = Instant::now().checked_sub(Duration::from_secs(5));
+            self.bars.clear();
             util::log("Berth's taskbar hider turned on");
-            self.tick();
+            self.tick(false);
         }
     }
 
-    /// Shows every taskbar again.
+    /// Shows every taskbar again and gives its strip back.
     pub fn disable(&mut self) {
         if !self.active {
             return;
         }
         self.active = false;
         HIDER_ACTIVE.store(false, std::sync::atomic::Ordering::Relaxed);
-        for b in bars() {
-            unsafe {
-                let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-            }
-        }
-        repair_work_areas();
+        self.bars.clear();
+        restore_bars();
         util::log("Berth's taskbar hider turned off; taskbar shown");
     }
 
-    pub fn tick(&mut self) {
+    /// Called every 15–50 ms. `animate` enables the reveal animation.
+    pub fn tick(&mut self, animate: bool) {
         if !self.active {
             return;
         }
         let bars = bars();
         let Some(p) = cursor() else { return };
         let now = Instant::now();
-        if let Some(t) = self.paused_until {
-            if now < t {
-                return;
-            }
-            self.paused_until = None;
-        }
+
+        // Forget taskbars that no longer exist (Explorer restarted).
+        self.bars.retain(|s| bars.iter().any(|b| b.hwnd == s.hwnd));
+
         let popup = shell_popup_in_front(&bars);
-        let over = bars
-            .iter()
-            .any(|b| unsafe { IsWindowVisible(b.hwnd).as_bool() } && inside(&b.rect, p, 4));
+        let over = bars.iter().any(|b| {
+            let shown = self
+                .bars
+                .iter()
+                .find(|s| s.hwnd == b.hwnd)
+                .map(|s| s.shown > 0.5)
+                .unwrap_or(true);
+            shown && inside(&b.rect, p, 4)
+        });
         let edge = bars.iter().any(|b| at_edge(b, p));
         let want_visible = popup || over || edge;
-
         if want_visible {
             self.leave_since = None;
         }
-        let any_visible = bars
-            .iter()
-            .any(|b| unsafe { IsWindowVisible(b.hwnd).as_bool() });
+        let hide = !want_visible && {
+            let since = *self.leave_since.get_or_insert(now);
+            since.elapsed() >= Duration::from_millis(500)
+        };
 
-        // Explorer re-showed the taskbar right after Berth hid it: count it,
-        // and if it keeps happening, stop fighting for a while so the screen
-        // stays calm.
-        if !want_visible && any_visible {
-            if let Some(h) = self.hidden_at.take() {
-                if h.elapsed() < Duration::from_millis(1500) {
-                    self.fights
-                        .retain(|t| t.elapsed() < Duration::from_secs(15));
-                    self.fights.push(now);
-                    if self.fights.len() >= 4 {
-                        self.fights.clear();
-                        self.paused_until = Some(now + Duration::from_secs(30));
-                        util::log(
-                            "Explorer keeps showing the taskbar; Berth pauses hiding it for 30 s",
-                        );
-                        return;
+        self.animating = false;
+        for b in &bars {
+            if !self.bars.iter().any(|s| s.hwnd == b.hwnd) {
+                // A taskbar Berth hasn't handled yet (or a new Explorer):
+                // undo any older Berth version's SW_HIDE.
+                unsafe {
+                    let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+                }
+                self.bars.push(BarState {
+                    hwnd: b.hwnd,
+                    shown: 1.0,
+                    target: 1.0,
+                    applied: -1.0,
+                });
+            }
+            let Some(st) = self.bars.iter_mut().find(|s| s.hwnd == b.hwnd) else {
+                continue;
+            };
+            if want_visible {
+                st.target = 1.0;
+            } else if hide {
+                st.target = 0.0;
+            }
+            if st.shown != st.target {
+                if animate {
+                    // Reveal over ~150 ms, hide over ~100 ms (at ~60 fps).
+                    st.shown = if st.target > st.shown {
+                        (st.shown + 0.12).min(st.target)
+                    } else {
+                        (st.shown - 0.18).max(st.target)
+                    };
+                } else {
+                    st.shown = st.target;
+                }
+            }
+            if st.shown != st.target {
+                self.animating = true;
+            }
+            // Explorer can drop the region (e.g. after a DPI change).
+            let lost = st.applied < 0.999 && st.applied >= 0.0 && !has_region(b.hwnd);
+            if (st.shown - st.applied).abs() > 0.001 || lost {
+                set_region(b.hwnd, b, ease(st.shown));
+                st.applied = st.shown;
+            }
+            // Keep the strip for apps (without a broadcast). Explorer may
+            // reclaim it after display or settings changes.
+            if b.work != b.monitor {
+                let due = self
+                    .last_work_fix
+                    .map(|t| t.elapsed() >= Duration::from_secs(1))
+                    .unwrap_or(true);
+                if due {
+                    self.last_work_fix = Some(now);
+                    if set_work_area_quiet(b.monitor) {
+                        resize_maximized(b.work, b.monitor);
                     }
                 }
             }
         }
-
-        let hide_now = !want_visible && {
-            let since = *self.leave_since.get_or_insert(now);
-            since.elapsed() >= Duration::from_millis(600)
-        };
-
-        for b in &bars {
-            let visible = unsafe { IsWindowVisible(b.hwnd).as_bool() };
-            if want_visible && !visible {
-                unsafe {
-                    let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-                }
-            } else if hide_now && visible {
-                unsafe {
-                    let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
-                }
-                self.hidden_at = Some(now);
-            }
-        }
     }
 }
 
-/// Undoes a work area left at full-screen size by Berth 0.1.4 (only if the
-/// taskbar's strip is currently not reserved).
-fn repair_work_areas() {
+fn ease(t: f32) -> f32 {
+    1.0 - (1.0 - t).powi(3)
+}
+
+/// Shows every taskbar (removes Berth's clip, undoes an older SW_HIDE) and
+/// gives its strip back, unless Windows' own auto-hide is in use.
+fn restore_bars() {
     let native_autohide = is_autohide() == Some(true);
     for b in bars() {
-        // With Windows' own auto-hide at the bottom, a full-size work area is correct.
+        unsafe {
+            use windows::Win32::Graphics::Gdi::SetWindowRgn;
+            let _ = SetWindowRgn(b.hwnd, None, true);
+            let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
+        }
         if b.edge == BarEdge::Bottom && native_autohide {
             continue;
         }
-        if b.work == b.monitor {
-            let _ = set_work_area(work_with_bar(&b));
+        let normal = work_with_bar(&b);
+        if b.work != normal {
+            if set_work_area_quiet(normal) {
+                resize_maximized(b.work, normal);
+            }
+            // Let Explorer recompute its own value too.
+            let _ = set_work_area(normal);
         }
     }
 }
 
-/// Last-resort restore (used after a crash or by the panic handler): show
-/// every taskbar and give back its strip of the screen.
+/// Last-resort restore (after an unexpected exit, or from the panic
+/// handler): show every taskbar and give it its strip back.
 pub fn emergency_restore() {
-    for b in bars() {
-        unsafe {
-            let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-        }
-    }
-    repair_work_areas();
+    restore_bars();
 }
 
 /// Resizes maximized windows on a monitor from the old to the new work
@@ -494,205 +572,7 @@ pub fn resize_maximized(old_work: RECT, new_work: RECT) -> usize {
     n
 }
 
-/// Developer experiment (CI only): how does Windows treat the work area
-/// when the taskbar is hidden and the work area is changed with or
-/// without a broadcast? Returns a log of observations.
-pub fn experiment() -> Vec<String> {
-    use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, ShowWindow, SW_MAXIMIZE, WINDOW_EX_STYLE,
-        WS_OVERLAPPEDWINDOW,
-    };
-    let mut out = Vec::new();
-    let Some(b) = bars().first().copied() else {
-        out.push("no taskbar".into());
-        return out;
-    };
-    let wait = |ms| std::thread::sleep(Duration::from_millis(ms));
-    let fmt = |r: RECT| format!("{},{}-{},{}", r.left, r.top, r.right, r.bottom);
-    let work = || bars().first().map(|b| b.work).unwrap_or_default();
-    // A maximized test window, to see whether apps get resized.
-    let test = unsafe {
-        CreateWindowExW(
-            WINDOW_EX_STYLE(0),
-            w!("STATIC"),
-            w!("berth-experiment"),
-            WS_OVERLAPPEDWINDOW,
-            100,
-            100,
-            300,
-            200,
-            None,
-            None,
-            None,
-            None,
-        )
-        .ok()
-    };
-    let win_rect = || {
-        let mut r = RECT::default();
-        if let Some(h) = test {
-            unsafe {
-                let _ = GetWindowRect(h, &mut r);
-            }
-        }
-        fmt(r)
-    };
-    if let Some(h) = test {
-        unsafe {
-            let _ = ShowWindow(h, SW_MAXIMIZE);
-        }
-    }
-    wait(500);
-    out.push(format!(
-        "monitor {} work {} bar {:?} {} max-window {}",
-        fmt(b.monitor),
-        fmt(work()),
-        b.edge,
-        fmt(b.rect),
-        win_rect()
-    ));
-    unsafe {
-        let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
-    }
-    wait(600);
-    out.push(format!(
-        "after hide: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    // A: quiet set (no broadcast)
-    let mut r = b.monitor;
-    let ra = unsafe {
-        SystemParametersInfoW(
-            SPI_SETWORKAREA,
-            0,
-            Some(&mut r as *mut RECT as *mut _),
-            Default::default(),
-        )
-    };
-    for ms in [100u64, 400, 1000, 2000] {
-        wait(ms);
-        out.push(format!(
-            "A quiet set ({}) +{ms}ms: work {} max-window {}",
-            ra.is_ok(),
-            fmt(work()),
-            win_rect()
-        ));
-    }
-    // Reveal and hide again.
-    unsafe {
-        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-    }
-    wait(600);
-    out.push(format!(
-        "A after reveal: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    unsafe {
-        let _ = ShowWindowAsync(b.hwnd, SW_HIDE);
-    }
-    wait(600);
-    out.push(format!(
-        "A after re-hide: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    // B: broadcast set
-    let mut r = b.monitor;
-    let rb = unsafe {
-        SystemParametersInfoW(
-            SPI_SETWORKAREA,
-            0,
-            Some(&mut r as *mut RECT as *mut _),
-            SPIF_SENDCHANGE,
-        )
-    };
-    for ms in [100u64, 400, 1000, 2000] {
-        wait(ms);
-        out.push(format!(
-            "B broadcast set ({}) +{ms}ms: work {} max-window {}",
-            rb.is_ok(),
-            fmt(work()),
-            win_rect()
-        ));
-    }
-    // Restore Explorer's view first.
-    unsafe {
-        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-    }
-    let _ = set_work_area(work_with_bar(&b));
-    wait(800);
-    out.push(format!(
-        "C start: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    // C: keep the taskbar shown but clip it to an empty region.
-    unsafe {
-        use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
-        let r = SetWindowRgn(b.hwnd, Some(CreateRectRgn(0, 0, 0, 0)), true);
-        out.push(format!("C empty region set: {r}"));
-    }
-    wait(600);
-    out.push(format!(
-        "C after region-hide: work {} visible {}",
-        fmt(work()),
-        unsafe { IsWindowVisible(b.hwnd).as_bool() }
-    ));
-    let mut r = b.monitor;
-    let rc = unsafe {
-        SystemParametersInfoW(
-            SPI_SETWORKAREA,
-            0,
-            Some(&mut r as *mut RECT as *mut _),
-            Default::default(),
-        )
-    };
-    let moved = resize_maximized(work_with_bar(&b), b.monitor);
-    for ms in [100u64, 400, 1000, 2000] {
-        wait(ms);
-        out.push(format!(
-            "C quiet set ({}) moved {moved} +{ms}ms: work {} max-window {}",
-            rc.is_ok(),
-            fmt(work()),
-            win_rect()
-        ));
-    }
-    unsafe {
-        use windows::Win32::Graphics::Gdi::SetWindowRgn;
-        let _ = SetWindowRgn(b.hwnd, None, true);
-    }
-    wait(800);
-    out.push(format!(
-        "C after region-reveal: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    unsafe {
-        use windows::Win32::Graphics::Gdi::{CreateRectRgn, SetWindowRgn};
-        let _ = SetWindowRgn(b.hwnd, Some(CreateRectRgn(0, 0, 0, 0)), true);
-    }
-    wait(800);
-    out.push(format!(
-        "C after region-rehide: work {} max-window {}",
-        fmt(work()),
-        win_rect()
-    ));
-    unsafe {
-        use windows::Win32::Graphics::Gdi::SetWindowRgn;
-        let _ = SetWindowRgn(b.hwnd, None, true);
-    }
-    // Restore.
-    unsafe {
-        let _ = ShowWindowAsync(b.hwnd, SW_SHOWNOACTIVATE);
-        if let Some(h) = test {
-            let _ = DestroyWindow(h);
-        }
-    }
-    wait(500);
-    let _ = set_work_area(work_with_bar(&b));
-    wait(500);
-    out.push(format!("restored: work {}", fmt(work())));
-    out
+/// Whether Berth's clip region is on a taskbar window (for the self-test).
+pub fn is_clipped(hwnd: HWND) -> bool {
+    has_region(hwnd)
 }
