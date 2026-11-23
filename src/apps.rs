@@ -612,3 +612,104 @@ fn icon_index(target: &str, small: bool) -> i32 {
         }
     }
 }
+
+// ----- taskbar pins, Recycle Bin -------------------------------------------------
+
+/// Shortcuts pinned to the Windows taskbar (desktop apps; apps from the
+/// Microsoft Store that are pinned there are not stored as shortcuts).
+pub fn taskbar_pins() -> Vec<PinnedItem> {
+    let Ok(appdata) = std::env::var("APPDATA") else {
+        return Vec::new();
+    };
+    let dir = std::path::Path::new(&appdata)
+        .join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
+    let Ok(rd) = std::fs::read_dir(&dir) else {
+        return Vec::new();
+    };
+    let mut paths: Vec<std::path::PathBuf> = rd
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.extension()
+                .map(|x| x.eq_ignore_ascii_case("lnk"))
+                .unwrap_or(false)
+        })
+        .collect();
+    paths.sort();
+    paths
+        .iter()
+        .map(|p| item_for_path(&p.to_string_lossy()))
+        .collect()
+}
+
+/// The apps a new dock starts with: what is pinned to the taskbar (if
+/// anything), with File Explorer and This PC first and Settings and the
+/// Recycle Bin last; otherwise Berth's defaults.
+pub fn first_run_items() -> Vec<PinnedItem> {
+    let pins = taskbar_pins();
+    let defaults = default_items();
+    if pins.is_empty() {
+        return defaults;
+    }
+    let mut items: Vec<PinnedItem> = Vec::new();
+    let push = |items: &mut Vec<PinnedItem>, it: &PinnedItem| {
+        if !items.iter().any(|x| {
+            x.target.eq_ignore_ascii_case(&it.target) || x.name.eq_ignore_ascii_case(&it.name)
+        }) {
+            items.push(it.clone());
+        }
+    };
+    for d in defaults
+        .iter()
+        .filter(|d| d.name == "File Explorer" || d.name == "This PC")
+    {
+        push(&mut items, d);
+    }
+    for p in &pins {
+        push(&mut items, p);
+    }
+    for d in defaults
+        .iter()
+        .filter(|d| d.name == "Settings" || d.name == "Recycle Bin")
+    {
+        push(&mut items, d);
+    }
+    items.truncate(config::MAX_ITEMS);
+    items
+}
+
+/// True when the Recycle Bin has something in it.
+pub fn recycle_bin_full() -> Option<bool> {
+    use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+    let mut info = SHQUERYRBINFO {
+        cbSize: std::mem::size_of::<SHQUERYRBINFO>() as u32,
+        ..Default::default()
+    };
+    unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info).ok()? };
+    Some(info.i64NumItems > 0)
+}
+
+/// Moves files and folders to the Recycle Bin with Windows' own file
+/// operation (and its usual confirmation, progress and undo).
+pub fn recycle(owner: Option<HWND>, paths: &[String]) -> bool {
+    use windows::Win32::UI::Shell::{
+        SHFileOperationW, FOF_ALLOWUNDO, FOF_WANTNUKEWARNING, FO_DELETE, SHFILEOPSTRUCTW,
+    };
+    if paths.is_empty() {
+        return false;
+    }
+    let mut from: Vec<u16> = Vec::new();
+    for p in paths {
+        from.extend(p.encode_utf16());
+        from.push(0);
+    }
+    from.push(0);
+    let mut op = SHFILEOPSTRUCTW {
+        hwnd: owner.unwrap_or_default(),
+        wFunc: FO_DELETE,
+        pFrom: PCWSTR(from.as_ptr()),
+        fFlags: (FOF_ALLOWUNDO.0 | FOF_WANTNUKEWARNING.0) as u16,
+        ..Default::default()
+    };
+    unsafe { SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool() }
+}

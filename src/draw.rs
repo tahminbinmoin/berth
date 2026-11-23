@@ -84,6 +84,14 @@ pub fn stroke(pm: &mut Pixmap, path: &Path, color: Color, width: f32) {
     pm.stroke_path(path, &solid(color), &s, Transform::identity(), None);
 }
 
+pub fn stroke_with(pm: &mut Pixmap, path: &Path, paint: &Paint, width: f32) {
+    let s = Stroke {
+        width,
+        ..Stroke::default()
+    };
+    pm.stroke_path(path, paint, &s, Transform::identity(), None);
+}
+
 pub fn gradient(p0: (f32, f32), p1: (f32, f32), c0: Color, c1: Color) -> Option<Shader<'static>> {
     LinearGradient::new(
         Point::from_xy(p0.0, p0.1),

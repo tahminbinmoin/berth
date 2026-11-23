@@ -27,6 +27,13 @@ taskbar away until you need it), and you control all of it from a dashboard.
 - **Pin and launch apps:** add apps from a list of everything in Start > All apps
   (including Microsoft Store apps), browse for any program, shortcut, file or folder, or
   drag files onto the dock. Drag icons to reorder them.
+- **Window previews:** rest the pointer on an open app to see a live thumbnail of each of
+  its windows. Click one to switch to it, or use its close button (or middle-click) to close it.
+- **Mac-style touches:** drag an icon off the dock to remove it, the Recycle Bin sits at
+  the end after a divider (drop files on it to delete them), and an app's icon bounces
+  when one of its windows needs your attention.
+- **Starts with your taskbar apps:** a new dock starts with the apps pinned to your
+  Windows taskbar, and **Dashboard > Apps > Import from taskbar** adds them at any time.
 - **Running indicators:** a dot under apps that have windows open. Clicking a running app
   brings its window forward. Clicking it again cycles through its windows or minimizes
   it, just like the taskbar.
@@ -153,6 +160,9 @@ are needed.
   dashboard, add an app, hide the dock, or quit.
 - **Add apps:** Dashboard > Apps > **Add apps** (search and tick anything in Start > All
   apps), **Add file**, **Add folder**, or drag files, folders and shortcuts onto the dock.
+- **Remove an icon:** drag it up and away from the dock until "Remove" appears, then let go.
+- **Delete files:** drop them on the Recycle Bin icon. Windows moves them to the Recycle
+  Bin (with its usual confirmation), so you can restore them.
 - **Reorder, rename, remove:** drag icons along the dock, or use the arrow, pencil and bin
   buttons next to each app on the dashboard's Apps page.
 - **Keyboard:** in the dashboard, Tab moves between controls, Space/Enter activate, arrow
@@ -314,7 +324,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.3.0 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.4.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -349,6 +359,10 @@ This is the first release. Please read these before relying on it.
   restarts Explorer to apply it. Left, top and right are only available on Windows 11
   builds that support them (Berth checks and reverts if not). Microsoft doesn't document
   this value, so a future Windows update could change it; Berth always checks the result.
+- **Window previews** are drawn by Windows itself. Minimized windows show the app's icon
+  instead of a picture, because Windows has nothing to show for them.
+- **Import from taskbar** finds desktop apps pinned to the taskbar. Apps from the Microsoft
+  Store that are pinned there aren't stored as shortcuts, so add those with **Add apps**.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
 - The dashboard is drawn by Berth itself (only the search and rename boxes are standard
   Windows controls), so screen readers can't yet describe its controls. Keyboard
