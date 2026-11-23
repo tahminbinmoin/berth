@@ -120,7 +120,9 @@ fn from_system_image_list(target: &str, px: u32) -> Option<Pixmap> {
     }
 }
 
-unsafe fn hicon_to_pixmap(icon: windows::Win32::UI::WindowsAndMessaging::HICON) -> Option<Pixmap> {
+pub unsafe fn hicon_to_pixmap(
+    icon: windows::Win32::UI::WindowsAndMessaging::HICON,
+) -> Option<Pixmap> {
     use windows::Win32::Graphics::Gdi::{GetObjectW, BITMAP};
     use windows::Win32::UI::WindowsAndMessaging::{GetIconInfo, ICONINFO};
     let mut ii = ICONINFO::default();
@@ -171,7 +173,7 @@ unsafe fn hicon_to_pixmap(icon: windows::Win32::UI::WindowsAndMessaging::HICON) 
     result
 }
 
-fn scale_to(src: &Pixmap, px: u32) -> Option<Pixmap> {
+pub fn scale_to(src: &Pixmap, px: u32) -> Option<Pixmap> {
     use tiny_skia::{FilterQuality, PixmapPaint, Transform};
     if src.width() == px && src.height() == px {
         return Some(src.clone());
@@ -206,6 +208,13 @@ impl IconCache {
             .entry(key)
             .or_insert_with(|| load_shell_icon(target, px))
             .as_ref()
+    }
+
+    /// The cached result without loading: `None` = not loaded yet.
+    pub fn peek(&self, target: &str, px: u32) -> Option<Option<&Pixmap>> {
+        self.map
+            .get(&(target.to_ascii_lowercase(), px))
+            .map(|o| o.as_ref())
     }
 
     pub fn clear(&mut self) {

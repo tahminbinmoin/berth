@@ -54,6 +54,24 @@ jobs:
           $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-preview', "$PWD\preview.png" -Wait -PassThru
           if ($p.ExitCode -ne 0) { throw "preview failed" }
 
+      - name: Render dashboard pages
+        shell: pwsh
+        run: |
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-dashboard', "$PWD\dash" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "dashboard render failed" }
+          Get-ChildItem dash | ForEach-Object { "{0} {1}" -f $_.Name, $_.Length }
+
+      - name: Print dashboard renders (pull requests only, for review)
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        run: |
+          Get-ChildItem dash\*.png | ForEach-Object {
+            "BEGIN-PNG $($_.Name)"
+            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b.Length; $i += 3000) { "B64:" + $b.Substring($i, [Math]::Min(3000, $b.Length - $i)) }
+            "END-PNG $($_.Name)"
+          }
+
       - name: Package
         shell: pwsh
         run: |
@@ -74,6 +92,7 @@ jobs:
             dist/*.sha256
             self-test.txt
             preview.png
+            dash/*.png
 
   # Publishes a GitHub release when main (or a v* tag) carries a version
   # that has not been released yet. Bump `version` in Cargo.toml to release.
