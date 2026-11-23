@@ -66,6 +66,9 @@ taskbar away until you need it), and you control all of it from a dashboard.
   <img src="docs/dashboard-apps-light.png" width="49%" alt="Berth Dashboard, Apps page">
   <img src="docs/dashboard-add-apps-dark.png" width="49%" alt="Add apps panel">
 </p>
+<p>
+  <img src="docs/recommended-setup-dark.png" width="60%" alt="Recommended setup panel shown on first launch">
+</p>
 
 Berth has no accounts, ads, telemetry, subscriptions or cloud features, and it never needs
 administrator rights.
