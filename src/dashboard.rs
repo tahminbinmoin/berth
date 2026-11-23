@@ -546,19 +546,20 @@ fn build() {
             &mut add,
             0,
             192,
-            36,
+            52,
             TASKBAR_NOTE,
-            "The taskbar slides back when you move the pointer to its edge. Your previous \
-             setting comes back when you turn this off or quit Berth.",
+            "Move the pointer to the taskbar's edge to bring it back. At the bottom Berth uses \
+             Windows' own auto-hide; on the left, top or right Berth hides the taskbar itself. \
+             Your setting comes back when you turn this off or quit Berth.",
         );
-        label(&mut add, 0, 240, "Display");
-        combo(&mut add, 0, 238, DISPLAY, &[]);
-        label(&mut add, 0, 282, "Position on screen");
-        combo(&mut add, 0, 280, POSITION, &["Bottom", "Left", "Right"]);
+        label(&mut add, 0, 256, "Display");
+        combo(&mut add, 0, 254, DISPLAY, &[]);
+        label(&mut add, 0, 298, "Position on screen");
+        combo(&mut add, 0, 296, POSITION, &["Bottom", "Left", "Right"]);
         note(
             &mut add,
             0,
-            326,
+            342,
             44,
             BG_NOTE,
             "Berth runs quietly in the background and keeps an icon in the notification area \
@@ -567,18 +568,18 @@ fn build() {
         button(
             &mut add,
             0,
-            (X0, 384, 190, 30),
+            (X0, 400, 190, 30),
             RESTORE,
             "Restore default settings\u{2026}",
         );
         button(
             &mut add,
             0,
-            (X0 + 200, 384, 150, 30),
+            (X0 + 200, 400, 150, 30),
             OPENFOLDER,
             "Open settings folder",
         );
-        button(&mut add, 0, (X0, 424, 190, 30), QUIT, "Quit Berth");
+        button(&mut add, 0, (X0, 440, 190, 30), QUIT, "Quit Berth");
 
         // Appearance.
         label(&mut add, 1, 68, "Theme");

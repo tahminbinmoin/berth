@@ -68,17 +68,20 @@ pub const WM_APP_UPDATE: u32 = WM_APP + 5;
 const TIMER_SAVE: usize = 10;
 const TIMER_RELAYOUT: usize = 11;
 const TIMER_UPDATE_CHECK: usize = 12;
+const TIMER_TASKBAR: usize = 13;
 /// How often Berth looks for updates while running (if notifications are on).
 const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
-const WHATS_NEW: &str = "New: Berth can hide the Windows taskbar for you. It slides back in when you move the pointer to its edge (Dashboard > General).";
+const WHATS_NEW: &str = "Fixed: hiding the Windows taskbar now also works when the taskbar is on the left, top or right (Dashboard > General).";
 
 pub struct App {
     pub settings: Settings,
     pub controller: HWND,
     pub dock: Dock,
     pub tray: tray::Tray,
+    pub hider: taskbar::Hider,
+    taskbar_ticks: u32,
     save_pending: bool,
     /// Self-test runs never write settings.
     pub persist: bool,
@@ -110,20 +113,24 @@ impl App {
         dashboard::notify_changed();
     }
 
-    /// Applies the "hide the Windows taskbar" option: turns Windows' own
-    /// taskbar auto-hide on (remembering the previous state) or restores it.
+    /// Applies the "hide the Windows taskbar" option. At the bottom edge
+    /// Berth turns on Windows' own auto-hide (remembering the previous
+    /// state). Windows only allows that at the bottom, so for a taskbar on
+    /// the left, top or right Berth hides it itself (see `taskbar::Hider`).
     pub fn sync_taskbar(&mut self) {
         if !self.persist {
             return; // self-test / preview runs never touch the taskbar
         }
-        if self.settings.hide_taskbar {
+        let want = self.settings.hide_taskbar;
+        let edge = taskbar::main_edge();
+        let native = want && edge == Some(taskbar::BarEdge::Bottom);
+        let own = want && edge.is_some() && !native;
+
+        if native {
             if self.settings.taskbar_autohide_before.is_none() {
-                match taskbar::is_autohide() {
-                    Some(prev) => {
-                        self.settings.taskbar_autohide_before = Some(prev);
-                        self.schedule_save();
-                    }
-                    None => return, // no taskbar running right now
+                if let Some(prev) = taskbar::is_autohide() {
+                    self.settings.taskbar_autohide_before = Some(prev);
+                    self.schedule_save();
                 }
             }
             taskbar::set_autohide(true);
@@ -133,11 +140,47 @@ impl App {
                 self.schedule_save();
             }
         }
+
+        if own && !self.hider.active {
+            self.hider.enable();
+            self.settings.taskbar_hidden_by_berth = true;
+            self.schedule_save();
+        } else if !own && self.hider.active {
+            self.hider.disable();
+            self.settings.taskbar_hidden_by_berth = false;
+            self.schedule_save();
+        }
+
+        unsafe {
+            if want {
+                // Fast ticks drive the hider; they also notice when the
+                // taskbar is moved to another edge.
+                SetTimer(Some(self.controller), TIMER_TASKBAR, 50, None);
+            } else {
+                let _ = KillTimer(Some(self.controller), TIMER_TASKBAR);
+            }
+        }
+    }
+
+    fn taskbar_tick(&mut self) {
+        self.hider.tick();
+        self.taskbar_ticks = self.taskbar_ticks.wrapping_add(1);
+        if self.taskbar_ticks % 40 == 0 {
+            self.sync_taskbar();
+        }
     }
 
     /// Puts the taskbar back the way it was (on quit or sign-out). The
     /// option itself stays on, so it is applied again next time.
     pub fn restore_taskbar(&mut self) {
+        unsafe {
+            let _ = KillTimer(Some(self.controller), TIMER_TASKBAR);
+        }
+        if self.hider.active {
+            self.hider.disable();
+            self.settings.taskbar_hidden_by_berth = false;
+            self.save_pending = self.persist;
+        }
         if let Some(prev) = self.settings.taskbar_autohide_before {
             if taskbar::set_autohide(prev) {
                 self.settings.taskbar_autohide_before = None;
@@ -789,6 +832,9 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                         error_box(None, &format!("Berth couldn't save its settings.\n\n{e}"));
                     }
                 }
+                TIMER_TASKBAR => {
+                    with_app(|a| a.taskbar_tick());
+                }
                 TIMER_UPDATE_CHECK => {
                     if with_app(|a| a.settings.check_updates_on_startup) == Some(true) {
                         updater::start_check(hwnd, WM_APP_UPDATE, true);
@@ -1026,6 +1072,9 @@ fn install_panic_hook() {
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("unexpected error: {info}");
         log(&msg);
+        if taskbar::HIDER_ACTIVE.load(std::sync::atomic::Ordering::Relaxed) {
+            taskbar::emergency_restore();
+        }
         error_box(
             None,
             &format!(
@@ -1123,6 +1172,9 @@ fn main() {
             if let config::LoadOutcome::Loaded(old) = config::load() {
                 if let Some(prev) = old.taskbar_autohide_before {
                     taskbar::set_autohide(prev);
+                }
+                if old.taskbar_hidden_by_berth {
+                    taskbar::emergency_restore();
                 }
             }
             if let Some(b) = config::reset_file() {
@@ -1229,6 +1281,8 @@ fn main() {
         controller,
         dock,
         tray: tray::Tray::new(controller),
+        hider: taskbar::Hider::default(),
+        taskbar_ticks: 0,
         save_pending: false,
         persist: !testing,
     };
@@ -1245,6 +1299,12 @@ fn main() {
 
     with_app(|a| {
         a.tray.add();
+        if a.settings.taskbar_hidden_by_berth && !a.hider.active {
+            // Berth stopped unexpectedly last time with the taskbar hidden.
+            taskbar::emergency_restore();
+            a.settings.taskbar_hidden_by_berth = false;
+            a.schedule_save();
+        }
         a.sync_taskbar();
         a.dock.render(&a.settings);
         a.dock.start_poll_timer();
@@ -1425,6 +1485,33 @@ fn self_test(report: &str) -> i32 {
                 ));
                 ok &= hidden && restored;
             }
+        }
+        // Berth's own hider (used for left/top/right taskbars).
+        if let Some(bar) = taskbar::bars().first().copied() {
+            let wait = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+            let work_before = bar.work;
+            let mut h = taskbar::Hider::default();
+            h.enable();
+            for _ in 0..20 {
+                wait(50);
+                h.tick();
+            }
+            wait(400);
+            let after = taskbar::bars().first().copied();
+            let hidden = unsafe { !IsWindowVisible(bar.hwnd).as_bool() };
+            let work_full = after.map(|b| b.work == b.monitor).unwrap_or(false);
+            h.disable();
+            wait(700);
+            let shown = unsafe { IsWindowVisible(bar.hwnd).as_bool() };
+            let work_back = taskbar::bars()
+                .first()
+                .map(|b| b.work == work_before)
+                .unwrap_or(false);
+            lines.push(format!(
+                "own hider ({:?} taskbar): hidden: {hidden}; work area freed: {work_full}; shown again: {shown}; work area restored: {work_back}",
+                bar.edge
+            ));
+            ok &= hidden && work_full && shown && work_back;
         }
     }
     lines.push(format!("result: {}", if ok { "PASS" } else { "FAIL" }));
