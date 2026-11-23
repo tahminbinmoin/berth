@@ -1635,6 +1635,7 @@ fn self_test(report: &str) -> i32 {
     // CI only (it briefly changes the taskbar): exercise the taskbar option
     // the same way the dashboard does, then put everything back.
     if std::env::var("BERTH_TEST_TASKBAR").as_deref() == Ok("1") {
+        log("self-test: taskbar auto-hide");
         match taskbar::is_autohide() {
             None => lines.push("taskbar: not running (skipped)".into()),
             Some(orig) => {
@@ -1652,6 +1653,7 @@ fn self_test(report: &str) -> i32 {
             }
         }
         // Berth's own hider (used for left/top/right taskbars).
+        log("self-test: own hider");
         if let Some(bar) = taskbar::bars().first().copied() {
             let wait = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
             let work_before = bar.work;
@@ -1677,6 +1679,7 @@ fn self_test(report: &str) -> i32 {
             ok &= clipped && full && unclipped && restored;
         }
         // Desktop icons: hide both, then put the old values back.
+        log("self-test: desktop icons");
         let ids = [winsetup::THIS_PC, winsetup::RECYCLE_BIN];
         let old: Vec<Option<u32>> = ids
             .iter()
@@ -1703,6 +1706,7 @@ fn self_test(report: &str) -> i32 {
         // Taskbar position: move it to the left (restarts Explorer), then back.
         if std::env::var("BERTH_TEST_MOVE").as_deref() == Ok("1") {
             if let Some(start) = taskbar::main_edge() {
+                log("self-test: taskbar move");
                 let stored = winsetup::stored_edge();
                 let r = winsetup::move_taskbar(taskbar::BarEdge::Left);
                 let after = taskbar::main_edge();

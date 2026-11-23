@@ -118,6 +118,7 @@ pub fn restart_explorer(while_closed: impl FnOnce()) -> Result<(), String> {
         let _ = CloseHandle(proc_);
         times.map_err(|e| e.message().to_string())?;
 
+        util::log(&format!("restarting Explorer (pid {pid})"));
         let mut session = 0u32;
         let mut key = vec![0u16; CCH_RM_SESSION_KEY as usize + 1];
         let r = RmStartSession(&mut session, None, PWSTR(key.as_mut_ptr()));
@@ -140,6 +141,7 @@ pub fn restart_explorer(while_closed: impl FnOnce()) -> Result<(), String> {
             ));
         } else {
             let r = RmShutdown(session, RmForceShutdown.0 as u32, None);
+            util::log(&format!("Explorer shutdown: {}", r.0));
             if r.is_err() {
                 result = Err(format!("Explorer couldn't be closed (error {})", r.0));
             }
@@ -149,7 +151,8 @@ pub fn restart_explorer(while_closed: impl FnOnce()) -> Result<(), String> {
                 let _ = CloseHandle(h);
             }
             while_closed();
-            let _ = RmRestart(session, None, None);
+            let r = RmRestart(session, None, None);
+            util::log(&format!("Explorer restart: {}", r.0));
         }
         let _ = RmEndSession(session);
         result?;
