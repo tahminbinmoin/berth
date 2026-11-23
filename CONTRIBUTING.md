@@ -22,8 +22,9 @@ relevant part of `%LOCALAPPDATA%\Berth\berth.log` after checking it for private 
 |---|---|
 | `src/main.rs` | Start-up, single instance, hidden controller window, menus, actions, message loop |
 | `src/dock.rs` | The dock window: geometry, layout, hit-testing, animation, drawing |
-| `src/dashboard.rs` | The Berth Dashboard window (all settings) |
-| `src/picker.rs` | "Add apps" window and the file/folder picker |
+| `src/dashboard.rs` | The Berth Dashboard window (all settings, Add apps panel) |
+| `src/widgets.rs` | Small immediate-mode widget toolkit (Windows 11 style) used by the dashboard |
+| `src/picker.rs` | Windows file/folder picker |
 | `src/apps.rs` | Launching, window enumeration and matching, installed-app list |
 | `src/icons.rs` | Shell icon loading and caching |
 | `src/config.rs` | Settings model, validation, load/save |
@@ -53,6 +54,7 @@ On Windows (recommended):
 cargo build --release
 cargo test
 .\target\release\Berth.exe --self-test report.txt
+.\target\release\Berth.exe --render-dashboard out   # every dashboard page as PNG
 ```
 
 `cargo clippy` and `cargo fmt` are appreciated before sending a pull request.
