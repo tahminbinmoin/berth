@@ -238,6 +238,9 @@ pub struct UiState {
     pub dropdown_items: Vec<String>,
     pub dropdown_selected: usize,
     pub dropdown_result: Option<(Id, usize)>,
+    /// Set on the frame a dropdown opens, so the opening click isn't also
+    /// taken as a choice.
+    pub dropdown_just_opened: bool,
     pub want_frame: bool,
 }
 
@@ -844,6 +847,7 @@ impl<'a> Ui<'a> {
                 RectF::new(pr.x / self.s, pr.y / self.s, pr.w / self.s, pr.h / self.s);
             self.st.dropdown_items = items.to_vec();
             self.st.dropdown_selected = selected;
+            self.st.dropdown_just_opened = true;
             self.st.want_frame = true;
         }
         result
@@ -935,6 +939,7 @@ impl<'a> Ui<'a> {
         self.dy = 0.0;
         if let Some(wid) = self.st.dropdown {
             self.blocked = false;
+            let just_opened = std::mem::take(&mut self.st.dropdown_just_opened);
             let anchor = self.st.dropdown_rect;
             let items = self.st.dropdown_items.clone();
             let item_h = 36.0;
@@ -986,11 +991,12 @@ impl<'a> Ui<'a> {
                     self.p.text,
                     ir.w - 20.0,
                 );
-                if hov && self.input.released {
+                if hov && self.input.released && !just_opened {
                     chosen = Some(i);
                 }
             }
-            match self.input.key {
+            let key = if just_opened { None } else { self.input.key };
+            match key {
                 Some(Key::Down) => {
                     self.st.dropdown_selected =
                         (self.st.dropdown_selected + 1).min(items.len().saturating_sub(1));
@@ -1011,7 +1017,7 @@ impl<'a> Ui<'a> {
                 self.st.dropdown_result = Some((wid, i));
                 self.st.dropdown = None;
                 self.st.want_frame = true;
-            } else if self.input.pressed && !hover_any && !self.mouse_in(anchor) {
+            } else if !just_opened && self.input.pressed && !hover_any && !self.mouse_in(anchor) {
                 self.st.dropdown = None;
                 self.st.want_frame = true;
             }
