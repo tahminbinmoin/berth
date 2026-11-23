@@ -20,6 +20,7 @@ mod draw;
 mod icons;
 mod picker;
 mod system;
+mod taskbar;
 mod text;
 mod tray;
 mod ui;
@@ -66,6 +67,12 @@ pub const WM_APP_UPDATE: u32 = WM_APP + 5;
 
 const TIMER_SAVE: usize = 10;
 const TIMER_RELAYOUT: usize = 11;
+const TIMER_UPDATE_CHECK: usize = 12;
+/// How often Berth looks for updates while running (if notifications are on).
+const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
+
+/// What's new in this version, shown after an update.
+const WHATS_NEW: &str = "New: Berth can hide the Windows taskbar for you. It slides back in when you move the pointer to its edge (Dashboard > General).";
 
 pub struct App {
     pub settings: Settings,
@@ -98,8 +105,45 @@ impl App {
         self.dock.sync_items(&self.settings);
         self.dock.relayout(&self.settings);
         self.dock.render(&self.settings);
+        self.sync_taskbar();
         self.schedule_save();
         dashboard::notify_changed();
+    }
+
+    /// Applies the "hide the Windows taskbar" option: turns Windows' own
+    /// taskbar auto-hide on (remembering the previous state) or restores it.
+    pub fn sync_taskbar(&mut self) {
+        if !self.persist {
+            return; // self-test / preview runs never touch the taskbar
+        }
+        if self.settings.hide_taskbar {
+            if self.settings.taskbar_autohide_before.is_none() {
+                match taskbar::is_autohide() {
+                    Some(prev) => {
+                        self.settings.taskbar_autohide_before = Some(prev);
+                        self.schedule_save();
+                    }
+                    None => return, // no taskbar running right now
+                }
+            }
+            taskbar::set_autohide(true);
+        } else if let Some(prev) = self.settings.taskbar_autohide_before {
+            if taskbar::set_autohide(prev) {
+                self.settings.taskbar_autohide_before = None;
+                self.schedule_save();
+            }
+        }
+    }
+
+    /// Puts the taskbar back the way it was (on quit or sign-out). The
+    /// option itself stays on, so it is applied again next time.
+    pub fn restore_taskbar(&mut self) {
+        if let Some(prev) = self.settings.taskbar_autohide_before {
+            if taskbar::set_autohide(prev) {
+                self.settings.taskbar_autohide_before = None;
+                self.save_pending = self.persist;
+            }
+        }
     }
 
     pub fn schedule_save(&mut self) {
@@ -420,7 +464,7 @@ pub fn perform(action: Action) {
             &format!(
                 "Berth {VERSION}\nA lightweight dock for Windows 11.\n\n\
                  Free and open source under the MIT License.\n{REPO_URL}\n\n\
-                 Berth only goes online when you check for updates. Settings and the log are stored in:\n{}",
+                 Berth only goes online to check GitHub for updates. Settings and the log are stored in:\n{}",
                 util::data_dir().display()
             ),
         ),
@@ -551,6 +595,16 @@ fn handle_update_outcome() {
             Ok(Some(r)) => {
                 dashboard::set_update_status(&format!("Berth {} is available.", r.version), false);
                 if silent {
+                    // Don't repeat the same notification every few hours.
+                    let already = LAST_NOTIFIED.with(|l| {
+                        let mut l = l.borrow_mut();
+                        let seen = *l == r.version;
+                        *l = r.version.clone();
+                        seen
+                    });
+                    if already {
+                        return;
+                    }
                     with_app(|a| {
                         a.tray.notify(
                             &format!("Berth {} is available", r.version),
@@ -632,6 +686,7 @@ fn handle_update_outcome() {
 
 fn quit() {
     with_app(|a| {
+        a.restore_taskbar();
         let _ = a.save_now();
         a.tray.remove();
     });
@@ -678,6 +733,10 @@ pub fn add_items(items: Vec<PinnedItem>, index: Option<usize>) -> usize {
 // ----- window procedures ---------------------------------------------------
 
 static mut TASKBAR_CREATED: u32 = 0;
+
+thread_local! {
+    static LAST_NOTIFIED: RefCell<String> = const { RefCell::new(String::new()) };
+}
 
 /// The single-instance mutex, released early when restarting after an update.
 static SINGLE_INSTANCE: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
@@ -730,6 +789,11 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                         error_box(None, &format!("Berth couldn't save its settings.\n\n{e}"));
                     }
                 }
+                TIMER_UPDATE_CHECK => {
+                    if with_app(|a| a.settings.check_updates_on_startup) == Some(true) {
+                        updater::start_check(hwnd, WM_APP_UPDATE, true);
+                    }
+                }
                 TIMER_RELAYOUT => {
                     let _ = KillTimer(Some(hwnd), TIMER_RELAYOUT);
                     if with_app(|a| {
@@ -752,7 +816,15 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
         }
         WM_QUERYENDSESSION => LRESULT(1),
         WM_ENDSESSION => {
-            with_app(|a| a.save_now());
+            if wp.0 != 0 {
+                with_app(|a| {
+                    a.restore_taskbar();
+                    a.save_pending = a.persist;
+                    a.save_now()
+                });
+            } else {
+                with_app(|a| a.save_now());
+            }
             LRESULT(0)
         }
         WM_DESTROY => {
@@ -760,8 +832,12 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
             LRESULT(0)
         }
         _ if msg != 0 && msg == TASKBAR_CREATED => {
-            // Explorer restarted: put the tray icon back.
-            with_app(|a| a.tray.add());
+            // Explorer restarted: put the tray icon back and re-apply the
+            // taskbar option.
+            with_app(|a| {
+                a.tray.add();
+                a.sync_taskbar();
+            });
             LRESULT(0)
         }
         _ => DefWindowProcW(hwnd, msg, wp, lp),
@@ -1043,6 +1119,12 @@ fn main() {
         s
     } else {
         if args.reset {
+            // Put the taskbar back before forgetting what it was.
+            if let config::LoadOutcome::Loaded(old) = config::load() {
+                if let Some(prev) = old.taskbar_autohide_before {
+                    taskbar::set_autohide(prev);
+                }
+            }
             if let Some(b) = config::reset_file() {
                 notice = Some(format!("Berth started with default settings. Your previous settings were saved as:\n{}", b.display()));
             }
@@ -1163,8 +1245,17 @@ fn main() {
 
     with_app(|a| {
         a.tray.add();
+        a.sync_taskbar();
         a.dock.render(&a.settings);
         a.dock.start_poll_timer();
+        unsafe {
+            SetTimer(
+                Some(a.controller),
+                TIMER_UPDATE_CHECK,
+                UPDATE_CHECK_INTERVAL_MS,
+                None,
+            )
+        };
         if first_run {
             a.tray.notify(
                 "Berth is running",
@@ -1177,13 +1268,19 @@ fn main() {
     });
     autostart::refresh_path_if_enabled();
     std::thread::spawn(updater::cleanup);
-    if args.after_update.is_some() {
+    let migrated = config::MIGRATED_TO_V2.load(std::sync::atomic::Ordering::Relaxed);
+    if args.after_update.is_some() || (migrated && !first_run) {
         log(&format!("now running Berth {VERSION} after an update"));
+        let body = if migrated {
+            format!("{WHATS_NEW} Update notifications are now on; turn them off in Dashboard > Updates.")
+        } else {
+            WHATS_NEW.to_string()
+        };
         with_app(|a| {
-            a.tray.notify(
-                &format!("Berth updated to {VERSION}"),
-                "Your settings and pinned apps were kept.",
-            )
+            if migrated {
+                a.schedule_save();
+            }
+            a.tray.notify(&format!("Berth updated to {VERSION}"), &body)
         });
     } else if with_app(|a| a.settings.check_updates_on_startup) == Some(true) {
         {
@@ -1310,6 +1407,26 @@ fn self_test(report: &str) -> i32 {
         system::system_animations_enabled()
     ));
     lines.push(format!("autostart: {:?}", autostart::state()));
+    // CI only (it briefly changes the taskbar): exercise the taskbar option
+    // the same way the dashboard does, then put everything back.
+    if std::env::var("BERTH_TEST_TASKBAR").as_deref() == Ok("1") {
+        match taskbar::is_autohide() {
+            None => lines.push("taskbar: not running (skipped)".into()),
+            Some(orig) => {
+                let wait = || std::thread::sleep(std::time::Duration::from_millis(700));
+                taskbar::set_autohide(true);
+                wait();
+                let hidden = taskbar::is_autohide() == Some(true);
+                taskbar::set_autohide(orig);
+                wait();
+                let restored = taskbar::is_autohide() == Some(orig);
+                lines.push(format!(
+                    "taskbar: auto-hide was {orig}; turned on: {hidden}; restored: {restored}"
+                ));
+                ok &= hidden && restored;
+            }
+        }
+    }
     lines.push(format!("result: {}", if ok { "PASS" } else { "FAIL" }));
     let _ = std::fs::write(report, lines.join("\r\n"));
     if ok {

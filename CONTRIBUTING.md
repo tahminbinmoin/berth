@@ -2,10 +2,10 @@
 
 Thanks for helping! Berth aims to stay **small, fast, offline and honest**:
 
-- No accounts, telemetry, ads or cloud services. The only network access is the
-  user-initiated (or opt-in) update check against this repository's GitHub releases.
-- No administrator rights, no changes to Windows system files, and no changes to taskbar
-  settings.
+- No accounts, telemetry, ads or cloud services. The only network access is the update
+  check against this repository's GitHub releases.
+- No administrator rights and no changes to Windows system files. Taskbar settings are
+  only changed by the explicit, reversible "Hide the Windows taskbar" option.
 - Use only documented Windows APIs. If a feature can only be done with undocumented
   tricks, leave it out or put it behind a clearly labelled fallback.
 - Don't claim support for anything that hasn't been tested on Windows 11.
@@ -28,6 +28,7 @@ relevant part of `%LOCALAPPDATA%\Berth\berth.log` after checking it for private 
 | `src/icons.rs` | Shell icon loading and caching |
 | `src/config.rs` | Settings model, validation, load/save |
 | `src/autostart.rs` | Opt-in launch at sign-in (HKCU Run key) |
+| `src/taskbar.rs` | Optional Windows taskbar auto-hide (documented AppBar API), restored on exit |
 | `src/updater.rs` | Update check, download, checksum verification and self-replacement |
 | `src/system.rs` | Theme, animation preference, monitors, full-screen detection |
 | `src/tray.rs` | Notification-area icon |

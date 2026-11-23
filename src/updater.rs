@@ -1,7 +1,8 @@
 //! One-click updates from this project's GitHub releases.
 //!
-//! Berth only goes online when the user presses "Check for updates" (or has
-//! turned on the opt-in startup check). It then:
+//! Berth only goes online when the user presses "Check for updates", or for
+//! the update-notification check (start-up and twice a day) while that
+//! setting is on. Installing always asks first. An install:
 //! 1. asks the GitHub API for the latest release of `tahminbinmoin/berth`;
 //! 2. if it is newer, downloads the release zip and its `.sha256` file from
 //!    that repository's release downloads only;

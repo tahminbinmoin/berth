@@ -8,7 +8,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::util;
 
-pub const SETTINGS_VERSION: u32 = 1;
+pub const SETTINGS_VERSION: u32 = 2;
+
+/// Set when settings from before 0.1.3 were upgraded (update notifications
+/// were switched on, and the user is told so once).
+pub static MIGRATED_TO_V2: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
 pub const MAX_ITEMS: usize = 64;
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
@@ -78,8 +83,14 @@ pub struct Settings {
     pub show_running_apps: bool,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
-    /// Opt-in: look for a new release on GitHub when Berth starts.
+    /// Look for a new release on GitHub at start-up and twice a day, and
+    /// show a notification when one is available. Installing always asks.
     pub check_updates_on_startup: bool,
+    /// Turn on Windows' taskbar auto-hide while Berth is running.
+    pub hide_taskbar: bool,
+    /// The taskbar auto-hide state before Berth changed it; restored when the
+    /// option is turned off or Berth quits. `None` = Berth hasn't changed it.
+    pub taskbar_autohide_before: Option<bool>,
     pub items: Vec<PinnedItem>,
 }
 
@@ -101,7 +112,9 @@ impl Default for Settings {
             show_running_apps: false,
             auto_hide: false,
             hide_in_fullscreen: true,
-            check_updates_on_startup: false,
+            check_updates_on_startup: true,
+            hide_taskbar: false,
+            taskbar_autohide_before: None,
             items: Vec::new(),
         }
     }
@@ -134,6 +147,7 @@ impl Settings {
     pub fn defaults_keeping_items(&self) -> Settings {
         Settings {
             items: self.items.clone(),
+            taskbar_autohide_before: self.taskbar_autohide_before,
             ..Settings::default()
         }
     }
@@ -183,6 +197,11 @@ pub fn load() -> LoadOutcome {
     };
     match serde_json::from_str::<Settings>(&text) {
         Ok(mut s) => {
+            if s.version < 2 {
+                // 0.1.3: update notifications are on by default.
+                s.check_updates_on_startup = true;
+                MIGRATED_TO_V2.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
             s.sanitize();
             LoadOutcome::Loaded(s)
         }
@@ -266,6 +285,18 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"position":"left"}"#).unwrap();
         assert_eq!(s.position, Edge::Left);
         assert_eq!(s.icon_size, 48);
+    }
+
+    #[test]
+    fn restore_defaults_keeps_taskbar_memory() {
+        let s = Settings {
+            hide_taskbar: true,
+            taskbar_autohide_before: Some(false),
+            ..Settings::default()
+        };
+        let d = s.defaults_keeping_items();
+        assert!(!d.hide_taskbar);
+        assert_eq!(d.taskbar_autohide_before, Some(false));
     }
 
     #[test]

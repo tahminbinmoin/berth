@@ -40,6 +40,9 @@ jobs:
 
       - name: Self-test (creates the dock, renders a frame, exits)
         shell: pwsh
+        env:
+          # Also toggles taskbar auto-hide on and back off (CI machine only).
+          BERTH_TEST_TASKBAR: "1"
         run: |
           $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--self-test', "$PWD\self-test.txt" -Wait -PassThru
           Get-Content self-test.txt
