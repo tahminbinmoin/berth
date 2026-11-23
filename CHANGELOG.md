@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.6 — 2026-11-24
+
+- **Improved:** with the taskbar on the left, top or right, apps now get the full screen
+  while it's hidden. Instead of hiding the taskbar window (which made Explorer reserve its
+  strip and resize windows), Berth clips it to an invisible, click-through shape and gives
+  the strip to apps without the system-wide broadcast that made Explorer take it back.
+  Maximized windows are resized to fill the screen, and everything is put back on quit.
+- **New:** the taskbar wipes in from the screen edge when revealed (follows the Animations
+  setting).
+
 ## 0.1.5 — 2026-11-24
 
 - **Fixed:** with the taskbar on the left, top or right and **Hide the Windows taskbar** on,
