@@ -27,6 +27,7 @@ mod ui;
 mod updater;
 mod util;
 mod widgets;
+mod winsetup;
 
 use std::cell::RefCell;
 
@@ -65,6 +66,7 @@ pub const WM_APP_SHOW_SETTINGS: u32 = WM_APP + 2;
 pub const WM_APP_RELAYOUT: u32 = WM_APP + 3;
 pub const WM_APP_ACTION: u32 = WM_APP + 4;
 pub const WM_APP_UPDATE: u32 = WM_APP + 5;
+pub const WM_APP_SETUP: u32 = WM_APP + 6;
 
 const TIMER_SAVE: usize = 10;
 const TIMER_RELAYOUT: usize = 11;
@@ -75,7 +77,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "New look: the Berth Dashboard has been redesigned in the Windows 11 style, with a built-in Add apps panel.";
+    "New: Recommended setup. Move the taskbar, hide it, and tidy the desktop in one click (Dashboard > General > Windows).";
 
 pub struct App {
     pub settings: Settings,
@@ -123,7 +125,8 @@ impl App {
         if !self.persist {
             return; // self-test / preview runs never touch the taskbar
         }
-        let want = self.settings.hide_taskbar;
+        // Keep the taskbar visible while Berth is moving it (Explorer restarts).
+        let want = self.settings.hide_taskbar && !setup_busy();
         let edge = taskbar::main_edge();
         let native = want && edge == Some(taskbar::BarEdge::Bottom);
         let own = want && edge.is_some() && !native;
@@ -735,6 +738,138 @@ fn handle_update_outcome() {
     }
 }
 
+// ----- Windows setup (taskbar position, desktop icons) ---------------------
+
+enum SetupJob {
+    Move(taskbar::BarEdge),
+    Undo(u8),
+}
+
+static SETUP_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static SETUP_RESULT: std::sync::Mutex<
+    Option<(bool, Result<(winsetup::MoveResult, Option<u8>), String>)>,
+> = std::sync::Mutex::new(None);
+
+pub fn setup_busy() -> bool {
+    SETUP_BUSY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn start_setup_job(job: SetupJob) {
+    if SETUP_BUSY.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return;
+    }
+    let Some(ctl) = controller() else {
+        SETUP_BUSY.store(false, std::sync::atomic::Ordering::Relaxed);
+        return;
+    };
+    let h = ctl.0 as isize;
+    with_app(|a| a.sync_taskbar());
+    dashboard::refresh();
+    std::thread::spawn(move || {
+        let (undo, result) = match job {
+            SetupJob::Move(e) => (false, winsetup::move_taskbar(e)),
+            SetupJob::Undo(code) => (
+                true,
+                winsetup::restore_taskbar_edge(code).map(|_| (winsetup::MoveResult::Moved, None)),
+            ),
+        };
+        if let Ok(mut r) = SETUP_RESULT.lock() {
+            *r = Some((undo, result));
+        }
+        SETUP_BUSY.store(false, std::sync::atomic::Ordering::Relaxed);
+        unsafe {
+            let _ = PostMessageW(Some(HWND(h as *mut _)), WM_APP_SETUP, WPARAM(0), LPARAM(0));
+        }
+    });
+}
+
+/// Moves the Windows taskbar (restarts Explorer; runs in the background).
+pub fn move_taskbar(target: taskbar::BarEdge) {
+    start_setup_job(SetupJob::Move(target));
+}
+
+fn handle_setup_result() {
+    let Some((undo, result)) = SETUP_RESULT.lock().ok().and_then(|mut r| r.take()) else {
+        return;
+    };
+    let owner = dashboard::window();
+    match result {
+        Ok((winsetup::MoveResult::Moved, before)) => {
+            with_app(|a| {
+                if undo {
+                    a.settings.taskbar_edge_before = None;
+                } else if a.settings.taskbar_edge_before.is_none() {
+                    a.settings.taskbar_edge_before = before;
+                }
+                a.apply();
+            });
+        }
+        Ok((winsetup::MoveResult::Unchanged, _)) => {}
+        Ok((winsetup::MoveResult::NotSupported, _)) => info_box(
+            owner,
+            "This version of Windows only supports the taskbar at the bottom of the screen, so it was left there.",
+        ),
+        Err(e) => error_box(owner, &format!("Berth couldn't move the taskbar.\n\n{e}")),
+    }
+    with_app(|a| {
+        a.tray.add();
+        a.sync_taskbar();
+    });
+    dashboard::refresh();
+}
+
+/// Shows or hides the This PC and Recycle Bin desktop icons, remembering
+/// the previous values once.
+pub fn set_desktop_icons(show: bool) {
+    let before = [
+        winsetup::desktop_icon_value(winsetup::THIS_PC),
+        winsetup::desktop_icon_value(winsetup::RECYCLE_BIN),
+    ];
+    with_app(|a| {
+        if a.settings.desktop_icons_before.is_none() {
+            a.settings.desktop_icons_before = Some(before);
+            a.schedule_save();
+        }
+    });
+    let v = if show { 0 } else { 1 };
+    let r = winsetup::set_desktop_icon_value(winsetup::THIS_PC, Some(v))
+        .and_then(|_| winsetup::set_desktop_icon_value(winsetup::RECYCLE_BIN, Some(v)));
+    if let Err(e) = r {
+        error_box(
+            dashboard::window(),
+            &format!("Berth couldn't change the desktop icons.\n\n{e}"),
+        );
+    }
+    winsetup::refresh_desktop();
+    dashboard::refresh();
+}
+
+/// Puts the taskbar position and desktop icons back the way they were
+/// before Berth's setup.
+pub fn undo_setup() {
+    let Some((edge, icons)) = with_app(|a| {
+        (
+            a.settings.taskbar_edge_before,
+            a.settings.desktop_icons_before,
+        )
+    }) else {
+        return;
+    };
+    if let Some([pc, bin]) = icons {
+        let _ = winsetup::set_desktop_icon_value(winsetup::THIS_PC, pc);
+        let _ = winsetup::set_desktop_icon_value(winsetup::RECYCLE_BIN, bin);
+        winsetup::refresh_desktop();
+        with_app(|a| {
+            a.settings.desktop_icons_before = None;
+            a.schedule_save();
+        });
+    }
+    if let Some(code) = edge {
+        start_setup_job(SetupJob::Undo(code));
+    }
+    dashboard::refresh();
+}
+
 fn quit() {
     with_app(|a| {
         a.restore_taskbar();
@@ -827,6 +962,10 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
         }
         WM_APP_UPDATE => {
             handle_update_outcome();
+            LRESULT(0)
+        }
+        WM_APP_SETUP => {
+            handle_setup_result();
             LRESULT(0)
         }
         WM_APP_RELAYOUT => {
@@ -1536,6 +1675,49 @@ fn self_test(report: &str) -> i32 {
                 bar.edge
             ));
             ok &= clipped && full && unclipped && restored;
+        }
+        // Desktop icons: hide both, then put the old values back.
+        let ids = [winsetup::THIS_PC, winsetup::RECYCLE_BIN];
+        let old: Vec<Option<u32>> = ids
+            .iter()
+            .map(|c| winsetup::desktop_icon_value(c))
+            .collect();
+        let set_ok = ids
+            .iter()
+            .all(|c| winsetup::set_desktop_icon_value(c, Some(1)).is_ok());
+        let hidden = ids.iter().all(|c| !winsetup::desktop_icon_shown(c));
+        for (c, v) in ids.iter().zip(&old) {
+            let _ = winsetup::set_desktop_icon_value(c, *v);
+        }
+        winsetup::refresh_desktop();
+        let back: Vec<Option<u32>> = ids
+            .iter()
+            .map(|c| winsetup::desktop_icon_value(c))
+            .collect();
+        lines.push(format!(
+            "desktop icons: values {old:?}; hidden: {}; restored: {}",
+            set_ok && hidden,
+            back == old
+        ));
+        ok &= set_ok && hidden && back == old;
+        // Taskbar position: move it to the left (restarts Explorer), then back.
+        if std::env::var("BERTH_TEST_MOVE").as_deref() == Ok("1") {
+            if let Some(start) = taskbar::main_edge() {
+                let stored = winsetup::stored_edge();
+                let r = winsetup::move_taskbar(taskbar::BarEdge::Left);
+                let after = taskbar::main_edge();
+                let undo = match &r {
+                    Ok((winsetup::MoveResult::Moved, Some(code))) => {
+                        winsetup::restore_taskbar_edge(*code).map_err(|e| e.to_string())
+                    }
+                    _ => Ok(()),
+                };
+                let end = taskbar::main_edge();
+                lines.push(format!(
+                    "taskbar move: from {start:?} (stored {stored:?}): {r:?}; edge after: {after:?}; undo: {undo:?}; edge at end: {end:?}"
+                ));
+                ok &= r.is_ok() && undo.is_ok() && end == Some(start);
+            }
         }
     }
     lines.push(format!("result: {}", if ok { "PASS" } else { "FAIL" }));
