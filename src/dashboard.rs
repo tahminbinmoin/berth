@@ -1,131 +1,129 @@
-//! The Berth Dashboard: one window to control everything — startup,
-//! placement, appearance, behavior and the pinned apps. Every change is
-//! applied to the dock immediately and saved automatically.
+//! The Berth Dashboard: one window to control everything, drawn in the
+//! style of Windows 11 Settings (sidebar navigation, rounded cards, toggle
+//! switches, sliders and dropdowns), following the light/dark theme and the
+//! Windows accent colour. Every change applies to the dock immediately and
+//! is saved automatically.
+//!
+//! The window is drawn with tiny-skia through the `widgets` toolkit; only
+//! the two text boxes (app search and rename) are native edit controls.
 
-use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::HashSet;
 
-use windows::core::{w, HSTRING, PWSTR};
+use tiny_skia::Pixmap;
+use windows::core::{w, HSTRING, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWINDOWATTRIBUTE};
 use windows::Win32::Graphics::Gdi::{
-    CreateSolidBrush, DeleteObject, DrawTextW, FillRect, GetStockObject, GetSysColor,
-    GetSysColorBrush, RoundRect, SelectObject, SetBkColor, SetBkMode, SetTextColor, COLOR_WINDOW,
-    COLOR_WINDOWTEXT, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, HBRUSH, HDC, HFONT,
-    HGDIOBJ, NULL_PEN, TRANSPARENT,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, InvalidateRect, SetBkColor,
+    SetDIBitsToDevice, SetTextColor, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HBRUSH,
+    HDC, HFONT, HGDIOBJ, PAINTSTRUCT,
 };
-use windows::Win32::UI::Controls::{
-    DRAWITEMSTRUCT, LVCOLUMNW, LVITEMW, MEASUREITEMSTRUCT, NMHDR, NMLVDISPINFOW,
+use windows::Win32::System::Registry::{RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_BINARY};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
+    VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_LEFT, VK_RETURN, VK_RIGHT, VK_SHIFT, VK_SPACE, VK_TAB,
+    VK_UP,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{EnableWindow, GetCapture, SetFocus};
+use windows::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use crate::config::{AnimationMode, Edge, HoverEffect, PinnedItem, Settings, ThemeMode};
-use crate::ui::{self, c, child, send};
-use crate::{autostart, picker, system, util, with_app, Action};
+use crate::draw::RectF;
+use crate::icons::IconCache;
+use crate::widgets::{id, idx, Font, Input, Key, Palette, TextCache, Ui, UiState};
+use crate::{apps, autostart, picker, system, ui, util, with_app, Action};
 
-const CLASS: windows::core::PCWSTR = w!("BerthDashboard");
+const CLASS: PCWSTR = w!("BerthDashboard2");
 const WM_APP_DASH_REFRESH: u32 = WM_APP + 40;
-const CLIENT_W: i32 = 720;
-const CLIENT_H: i32 = 540;
-const X0: i32 = 200;
-const LABEL_W: i32 = 176;
-const CTRL_X: i32 = X0 + 180;
-const CTRL_W: i32 = 250;
-const VALUE_X: i32 = CTRL_X + CTRL_W + 8;
+const WM_APP_FRAME: u32 = WM_APP + 41;
+const WM_APP_EDIT_DONE: u32 = WM_APP + 42;
+const TIMER_ICONS: usize = 1;
+const MOUSELEAVE: u32 = 0x02A3;
 
-const PAGES: [&str; 6] = [
-    "General",
-    "Appearance",
-    "Behavior",
-    "Apps",
-    "Updates",
-    "About",
-];
+const W: f32 = 1000.0;
+const H: f32 = 680.0;
+const SIDEBAR: f32 = 284.0;
+const X0: f32 = 304.0;
+const CW: f32 = 664.0;
+const TOP: f32 = 86.0;
+
 pub const UPDATES_PAGE: usize = 4;
-const ABOUT_PAGE: usize = 5;
-
-// Control IDs.
-const NAV: u16 = 100;
-const AUTOSTART: u16 = 200;
-const AUTOSTART_NOTE: u16 = 201;
-const SHOWDOCK: u16 = 202;
-const DISPLAY: u16 = 203;
-const POSITION: u16 = 204;
-const RESTORE: u16 = 205;
-const OPENFOLDER: u16 = 206;
-const QUIT: u16 = 207;
-const BG_NOTE: u16 = 208;
-const TASKBAR: u16 = 209;
-const TASKBAR_NOTE: u16 = 210;
-const THEME: u16 = 300;
-const SIZE: u16 = 301;
-const SIZE_V: u16 = 302;
-const SPACING: u16 = 303;
-const SPACING_V: u16 = 304;
-const MARGIN: u16 = 305;
-const MARGIN_V: u16 = 306;
-const OPACITY: u16 = 307;
-const OPACITY_V: u16 = 308;
-const EFFECT: u16 = 309;
-const MAG: u16 = 310;
-const MAG_V: u16 = 311;
-const ANIM: u16 = 400;
-const DOTS: u16 = 401;
-const RUNAPPS: u16 = 402;
-const AUTOHIDE: u16 = 403;
-const FULLSCREEN: u16 = 404;
-const BEHAVIOR_NOTE: u16 = 405;
-const LIST: u16 = 500;
-const ADDAPP: u16 = 501;
-const ADDFILE: u16 = 502;
-const ADDFOLDER: u16 = 503;
-const RENAME: u16 = 504;
-const UP: u16 = 505;
-const DOWN: u16 = 506;
-const REMOVE: u16 = 507;
-const APPS_NOTE: u16 = 508;
-const ABOUT_TEXT: u16 = 600;
-const WEBSITE: u16 = 601;
-const LOGS: u16 = 602;
-const UPD_VERSION: u16 = 700;
-const UPD_CHECK: u16 = 701;
-const UPD_STATUS: u16 = 702;
-const UPD_AUTO: u16 = 703;
-const UPD_NOTE: u16 = 704;
-const UPD_RELEASES: u16 = 705;
-const TITLE_BASE: u16 = 900;
-
-const NOTES: [u16; 8] = [
-    TASKBAR_NOTE,
-    AUTOSTART_NOTE,
-    BG_NOTE,
-    BEHAVIOR_NOTE,
-    APPS_NOTE,
-    ABOUT_TEXT,
-    UPD_STATUS,
-    UPD_NOTE,
+const APPS_PAGE: usize = 3;
+const PAGES: [(&str, char); 6] = [
+    ("General", '\u{E713}'),
+    ("Appearance", '\u{E790}'),
+    ("Behavior", '\u{E7F4}'),
+    ("Apps", '\u{E71D}'),
+    ("Updates", '\u{E895}'),
+    ("About", '\u{E946}'),
 ];
+
+// ----- state -----------------------------------------------------------------
+
+enum Cmd {
+    Set(Box<dyn FnOnce(&mut Settings)>),
+    Autostart(bool),
+    ShowDock(bool),
+    Restore,
+    OpenFolder,
+    Quit,
+    CheckUpdates,
+    OpenUrl(String),
+    OpenSheet,
+    CloseSheet,
+    SheetAdd,
+    Browse(bool),
+    StartRename(usize),
+    Move(usize, bool),
+    Remove(usize),
+}
+
+struct Sheet {
+    apps: Vec<apps::InstalledApp>,
+    shown: Vec<usize>,
+    selected: HashSet<String>,
+    scroll: f32,
+    query: String,
+}
+
+struct Snap {
+    s: Settings,
+    hidden: bool,
+    auto: autostart::State,
+    displays: Vec<(String, String)>,
+}
 
 struct Dash {
     hwnd: HWND,
     dpi: u32,
-    font: HFONT,
-    bold: HFONT,
-    title: HFONT,
+    pm: Option<Pixmap>,
+    bgra: Vec<u8>,
+    st: UiState,
+    text: TextCache,
+    input: Input,
     page: usize,
-    pages: Vec<Vec<HWND>>,
-    all: Vec<HWND>,
-    h: HashMap<u16, HWND>,
-    displays: Vec<String>,
-    items: Vec<PinnedItem>,
-    select_after_refresh: Option<usize>,
-    nav_brush: HBRUSH,
+    scroll: [f32; 6],
+    content_h: [f32; 6],
+    icons: IconCache,
+    icons_pending: bool,
+    sheet: Option<Sheet>,
+    rename: Option<usize>,
+    search_edit: HWND,
+    rename_edit: HWND,
+    edit_font: HFONT,
+    edit_brush: HBRUSH,
+    edit_colors: (COLORREF, COLORREF),
+    last_dark: Option<bool>,
+    accent: (Option<(u8, u8, u8)>, Option<(u8, u8, u8)>),
+    logo: Option<Pixmap>,
+    displays: Vec<(String, String)>,
+    tracking: bool,
 }
 
 thread_local! {
     static UPDATE_STATUS: RefCell<(String, bool)> = const { RefCell::new((String::new(), false)) };
     static DASH: RefCell<Option<Dash>> = const { RefCell::new(None) };
-    static BUILD_DPI: Cell<u32> = const { Cell::new(96) };
 }
 
 fn with_dash<R>(f: impl FnOnce(&mut Dash) -> R) -> Option<R> {
@@ -139,11 +137,37 @@ fn hwnd() -> Option<HWND> {
     with_dash(|d| d.hwnd)
 }
 
-fn ctl(id: u16) -> HWND {
-    with_dash(|d| d.h.get(&id).copied())
-        .flatten()
-        .unwrap_or_default()
+/// Windows accent palette: (for dark theme, for light theme).
+fn read_accent() -> (Option<(u8, u8, u8)>, Option<(u8, u8, u8)>) {
+    let mut buf = [0u8; 32];
+    let mut size = buf.len() as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            &HSTRING::from(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent"),
+            &HSTRING::from("AccentPalette"),
+            RRF_RT_REG_BINARY,
+            None,
+            Some(buf.as_mut_ptr() as *mut _),
+            Some(&mut size),
+        )
+    };
+    if r.is_err() || size < 32 {
+        return (None, None);
+    }
+    let at = |i: usize| Some((buf[i * 4], buf[i * 4 + 1], buf[i * 4 + 2]));
+    (at(1), at(4))
 }
+
+fn monitors_list() -> Vec<(String, String)> {
+    let mut v = vec![("Main display".to_string(), "primary".to_string())];
+    for (i, m) in system::monitors().iter().enumerate() {
+        v.push((m.label(i), m.device.clone()));
+    }
+    v
+}
+
+// ----- public API --------------------------------------------------------------
 
 pub fn register(hinst: HINSTANCE) -> bool {
     let wc = WNDCLASSEXW {
@@ -153,23 +177,212 @@ pub fn register(hinst: HINSTANCE) -> bool {
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW).unwrap_or_default() },
         hIcon: crate::tray::app_icon(32),
         hIconSm: crate::tray::app_icon(16),
-        hbrBackground: unsafe { GetSysColorBrush(COLOR_WINDOW) },
         lpszClassName: CLASS,
         ..Default::default()
     };
     unsafe { RegisterClassExW(&wc) != 0 }
 }
 
-/// Opens the dashboard (or brings it forward) on a given page.
+pub fn open() {
+    open_page(0);
+}
+
+/// Opens the dashboard on the Apps page with the "Add apps" panel.
+pub fn open_add_apps() {
+    open_page(APPS_PAGE);
+    run_cmds(vec![Cmd::OpenSheet]);
+}
+
 pub fn open_page(page: usize) {
+    open_page_inner(page, true);
+}
+
+/// Developer aid (`--render-dashboard <dir>`): draws every page in light
+/// and dark, plus the Add apps panel, to PNG files.
+pub fn render_to_files(dir: &str) -> Result<usize, String> {
+    open_page_inner(0, false);
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let mut n = 0;
+    for dark in [false, true] {
+        with_app(|a| {
+            a.settings.theme = if dark {
+                ThemeMode::Dark
+            } else {
+                ThemeMode::Light
+            }
+        });
+        for page in 0..PAGES.len() {
+            with_dash(|d| {
+                d.page = page;
+                d.last_dark = None;
+            });
+            frame();
+            frame();
+            let name = format!(
+                "{dir}\\dashboard-{}-{}.png",
+                page,
+                if dark { "dark" } else { "light" }
+            );
+            with_dash(|d| d.pm.as_ref().map(|p| p.save_png(&name)))
+                .flatten()
+                .transpose()
+                .map_err(|e| e.to_string())?;
+            n += 1;
+        }
+        with_dash(|d| {
+            d.page = APPS_PAGE;
+            d.sheet = Some(Sheet {
+                apps: apps::installed_apps(),
+                shown: Vec::new(),
+                selected: HashSet::new(),
+                scroll: 0.0,
+                query: String::new(),
+            });
+            if let Some(sh) = d.sheet.as_mut() {
+                filter_sheet(sh);
+                if let Some(first) = sh.apps.first() {
+                    sh.selected.insert(first.target.clone());
+                }
+            }
+        });
+        for _ in 0..30 {
+            frame();
+        }
+        let name = format!(
+            "{dir}\\dashboard-sheet-{}.png",
+            if dark { "dark" } else { "light" }
+        );
+        with_dash(|d| d.pm.as_ref().map(|p| p.save_png(&name)))
+            .flatten()
+            .transpose()
+            .map_err(|e| e.to_string())?;
+        with_dash(|d| d.sheet = None);
+        n += 1;
+    }
+    Ok(n)
+}
+
+// ----- automated interaction test (self-test) ------------------------------
+
+fn sim(x: f32, y: f32, down: bool, pressed: bool, released: bool) {
+    with_dash(|d| {
+        let s = d.scale();
+        d.input.mx = x * s;
+        d.input.my = y * s;
+        d.input.inside = true;
+        d.input.down = down;
+        d.input.pressed = pressed;
+        d.input.released = released;
+    });
+    frame();
+}
+
+fn sim_click(x: f32, y: f32) {
+    sim(x, y, false, false, false);
+    sim(x, y, true, true, false);
+    sim(x, y, false, false, true);
+    frame();
+}
+
+fn sim_key(k: Key) {
+    with_dash(|d| d.input.key = Some(k));
+    frame();
+    frame();
+}
+
+/// Drives the dashboard with simulated input and checks the results.
+/// Returns (report lines, all passed). Settings are not saved in tests.
+pub fn self_test() -> (Vec<String>, bool) {
+    let mut lines = Vec::new();
+    let mut ok = true;
+    open_page_inner(0, false);
+    let mut check = |name: &str, pass: bool, lines: &mut Vec<String>| {
+        lines.push(format!(
+            "  dashboard {name}: {}",
+            if pass { "ok" } else { "FAILED" }
+        ));
+        ok &= pass;
+    };
+    // Sidebar navigation.
+    sim_click(100.0, 92.0 + 40.0 + 18.0);
+    check(
+        "nav to Appearance",
+        with_dash(|d| d.page) == Some(1),
+        &mut lines,
+    );
+    sim_click(100.0, 92.0 + 18.0);
+    check(
+        "nav to General",
+        with_dash(|d| d.page) == Some(0),
+        &mut lines,
+    );
+    // Toggle "Show the dock" (General > Dock, first row).
+    let before = with_app(|a| a.dock.user_hidden).unwrap_or(false);
+    sim_click(right() - 20.0, 242.0 + ROW / 2.0);
+    let after = with_app(|a| a.dock.user_hidden).unwrap_or(false);
+    check("toggle Show the dock", after != before, &mut lines);
+    sim_click(right() - 20.0, 242.0 + ROW / 2.0);
+    // Dropdown by keyboard: open Position, choose the next item.
+    sim_click(right() - 120.0, 242.0 + 2.0 * ROW + 34.0);
+    let opened = with_dash(|d| d.st.dropdown.is_some()).unwrap_or(false);
+    sim_key(Key::Down);
+    sim_key(Key::Enter);
+    let pos = with_app(|a| a.settings.position).unwrap_or(Edge::Bottom);
+    check("dropdown Position", opened && pos == Edge::Left, &mut lines);
+    with_app(|a| {
+        a.settings.position = Edge::Bottom;
+        a.apply();
+    });
+    // Dropdown by mouse: open Position and click "Right" (third item).
+    let anchor_y = 242.0 + 2.0 * ROW + 18.0;
+    sim_click(right() - 120.0, anchor_y + 16.0);
+    let opened = with_dash(|d| d.st.dropdown.is_some()).unwrap_or(false);
+    let item_top = anchor_y - 4.0 + (32.0 - 36.0) / 2.0 + 4.0;
+    sim_click(right() - 120.0, item_top + 2.0 * 36.0 + 17.0);
+    let pos = with_app(|a| a.settings.position).unwrap_or(Edge::Bottom);
+    check(
+        "dropdown by mouse",
+        opened && pos == Edge::Right,
+        &mut lines,
+    );
+    with_app(|a| {
+        a.settings.position = Edge::Bottom;
+        a.apply();
+    });
+    // Slider drag: Appearance > Icon size to about the middle.
+    sim_click(100.0, 92.0 + 40.0 + 18.0);
+    let (sx, sy, sw) = (right() - 220.0, 310.0 + ROW / 2.0, 220.0);
+    sim(sx + 10.0, sy, false, false, false);
+    sim(sx + 10.0, sy, true, true, false);
+    sim(sx + sw / 2.0, sy, true, false, false);
+    sim(sx + sw / 2.0, sy, false, false, true);
+    let size = with_app(|a| a.settings.icon_size).unwrap_or(0);
+    check(
+        &format!("slider Icon size (now {size})"),
+        (70..=82).contains(&size),
+        &mut lines,
+    );
+    // Keyboard: Tab focuses something, Escape closes nothing harmful.
+    sim_key(Key::Tab);
+    check(
+        "keyboard focus",
+        with_dash(|d| d.st.focus.is_some()).unwrap_or(false),
+        &mut lines,
+    );
+    close();
+    (lines, ok)
+}
+
+fn open_page_inner(page: usize, show: bool) {
     if let Some(h) = hwnd() {
+        with_dash(|d| d.page = page.min(PAGES.len() - 1));
         unsafe {
             if IsIconic(h).as_bool() {
                 let _ = ShowWindow(h, SW_RESTORE);
             }
             let _ = SetForegroundWindow(h);
         }
-        show_page(page.min(PAGES.len() - 1));
+        request_frame();
         return;
     }
     let (work, dpi) = with_app(|a| a.dock.geo.as_ref().map(|g| (g.monitor.work, g.monitor.dpi)))
@@ -185,11 +398,10 @@ pub fn open_page(page: usize) {
             96,
         ));
     let style = (WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX).0;
-    let scale = dpi as f32 / 96.0;
-    let r = ui::centered_window_rect(work, CLIENT_W, CLIENT_H, scale, style, 0, dpi);
+    let r = ui::centered_window_rect(work, W as i32, H as i32, dpi as f32 / 96.0, style, 0, dpi);
     let created = unsafe {
         CreateWindowExW(
-            WINDOW_EX_STYLE(0x10000), // WS_EX_CONTROLPARENT
+            WINDOW_EX_STYLE(0),
             CLASS,
             w!("Berth Dashboard"),
             WINDOW_STYLE(style),
@@ -208,48 +420,71 @@ pub fn open_page(page: usize) {
         return;
     };
     let dpi = ui::dpi_of(h);
+    let edit = |id: isize| unsafe {
+        CreateWindowExW(
+            WINDOW_EX_STYLE(0),
+            w!("EDIT"),
+            w!(""),
+            WINDOW_STYLE(WS_CHILD.0 | ES_AUTOHSCROLL as u32),
+            0,
+            0,
+            10,
+            10,
+            Some(h),
+            Some(HMENU(id as *mut _)),
+            None,
+            None,
+        )
+        .unwrap_or_default()
+    };
+    let search = edit(10);
+    let rename = edit(11);
+    unsafe {
+        let _ = SetWindowSubclass(search, Some(edit_proc), 1, 0);
+        let _ = SetWindowSubclass(rename, Some(edit_proc), 2, 0);
+    }
+    let logo = unsafe {
+        let icon = crate::tray::app_icon(256);
+        if icon.is_invalid() {
+            None
+        } else {
+            crate::icons::hicon_to_pixmap(icon)
+        }
+    };
     DASH.with(|d| {
         *d.borrow_mut() = Some(Dash {
             hwnd: h,
             dpi,
-            font: HFONT::default(),
-            bold: HFONT::default(),
-            title: HFONT::default(),
+            pm: None,
+            bgra: Vec::new(),
+            st: UiState::default(),
+            text: TextCache::default(),
+            input: Input::default(),
             page: page.min(PAGES.len() - 1),
-            pages: Vec::new(),
-            all: Vec::new(),
-            h: HashMap::new(),
-            displays: Vec::new(),
-            items: Vec::new(),
-            select_after_refresh: None,
-            nav_brush: unsafe { CreateSolidBrush(COLORREF(0x00F4_ECE8)) }, // RGB(232,236,244)
+            scroll: [0.0; 6],
+            content_h: [0.0; 6],
+            icons: IconCache::default(),
+            icons_pending: false,
+            sheet: None,
+            rename: None,
+            search_edit: search,
+            rename_edit: rename,
+            edit_font: HFONT::default(),
+            edit_brush: HBRUSH::default(),
+            edit_colors: (COLORREF(0), COLORREF(0)),
+            last_dark: None,
+            accent: read_accent(),
+            logo,
+            displays: monitors_list(),
+            tracking: false,
         })
     });
-    build();
-    load_values();
-    show_page(page.min(PAGES.len() - 1));
-    unsafe {
-        let _ = ShowWindow(h, SW_SHOW);
-        let _ = SetForegroundWindow(h);
-    }
-}
-
-pub fn open() {
-    open_page(0);
-}
-
-/// The dashboard window, if open (used as the owner for message boxes).
-pub fn window() -> Option<HWND> {
-    hwnd()
-}
-
-/// Shows update progress on the Updates page (kept while the window is closed).
-pub fn set_update_status(text: &str, busy: bool) {
-    UPDATE_STATUS.with(|s| *s.borrow_mut() = (text.to_string(), busy));
-    if hwnd().is_some() {
-        ui::set_text(ctl(UPD_STATUS), text);
+    update_edit_font();
+    frame();
+    if show {
         unsafe {
-            let _ = EnableWindow(ctl(UPD_CHECK), !busy);
+            let _ = ShowWindow(h, SW_SHOW);
+            let _ = SetForegroundWindow(h);
         }
     }
 }
@@ -262,8 +497,11 @@ pub fn close() {
     }
 }
 
-/// Asks the dashboard (if open) to re-read settings. Safe to call while the
-/// app state is borrowed.
+pub fn window() -> Option<HWND> {
+    hwnd()
+}
+
+/// Re-reads settings (safe to call while the app state is borrowed).
 pub fn notify_changed() {
     if let Some(h) = hwnd() {
         unsafe {
@@ -276,11 +514,14 @@ pub fn refresh() {
     notify_changed();
 }
 
-pub fn dialog_message(msg: &MSG) -> bool {
-    match hwnd() {
-        Some(h) => unsafe { IsDialogMessageW(h, msg).as_bool() },
-        None => false,
-    }
+/// The dashboard is not a dialog; nothing to pre-translate.
+pub fn dialog_message(_msg: &MSG) -> bool {
+    false
+}
+
+pub fn set_update_status(text: &str, busy: bool) {
+    UPDATE_STATUS.with(|s| *s.borrow_mut() = (text.to_string(), busy));
+    request_frame();
 }
 
 /// First launch: open the dashboard and ask about starting with Windows.
@@ -304,736 +545,874 @@ pub fn first_run_welcome() {
     notify_changed();
 }
 
-// ----- building ------------------------------------------------------------
-
-fn build() {
-    let Some((h, dpi)) = with_dash(|d| (d.hwnd, d.dpi)) else {
-        return;
-    };
-    BUILD_DPI.with(|b| b.set(dpi));
-    let scale = dpi as f32 / 96.0;
-    let font = ui::message_font(dpi, 1.0, 0);
-    let bold = ui::message_font(dpi, 1.0, 600);
-    let title = ui::message_font(dpi, 1.55, 600);
-    let mut map: HashMap<u16, HWND> = HashMap::new();
-    let mut pages: Vec<Vec<HWND>> = vec![Vec::new(); PAGES.len()];
-    let mut all = Vec::new();
-
-    {
-        let mut add = |page: Option<usize>,
-                       class: &str,
-                       text: &str,
-                       style: u32,
-                       ex: u32,
-                       r: (i32, i32, i32, i32),
-                       id: u16,
-                       f: HFONT| {
-            let c = child(h, class, text, style, ex, r, id, f, scale);
-            map.insert(id, c);
-            all.push(c);
-            if let Some(p) = page {
-                pages[p].push(c);
-            }
-            c
-        };
-
-        // Navigation.
-        let nav = add(
-            None,
-            "LISTBOX",
-            "",
-            c::LBS_NOTIFY | c::LBS_OWNERDRAWFIXED | c::LBS_HASSTRINGS | c::LBS_NOINTEGRALHEIGHT,
-            0,
-            (12, 16, 172, CLIENT_H - 32),
-            NAV,
-            font,
-        );
-        for p in PAGES {
-            send(nav, c::LB_ADDSTRING, 0, HSTRING::from(p).as_ptr() as isize);
-        }
-
-        for (i, p) in PAGES.iter().enumerate() {
-            add(
-                Some(i),
-                "STATIC",
-                p,
-                c::SS_NOPREFIX,
-                0,
-                (X0, 14, 480, 36),
-                TITLE_BASE + i as u16,
-                title,
-            );
-        }
-
-        let label = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                     page: usize,
-                     y: i32,
-                     text: &str| {
-            add(
-                Some(page),
-                "STATIC",
-                text,
-                c::SS_NOPREFIX,
-                0,
-                (X0, y + 1, LABEL_W, 22),
-                0,
-                font,
-            );
-        };
-        let combo = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                     page: usize,
-                     y: i32,
-                     id: u16,
-                     options: &[&str]| {
-            let cb = add(
-                Some(page),
-                "COMBOBOX",
-                "",
-                c::CBS_DROPDOWNLIST | WS_VSCROLL.0,
-                0,
-                (CTRL_X, y, CTRL_W, 300),
-                id,
-                font,
-            );
-            for o in options {
-                send(cb, c::CB_ADDSTRING, 0, HSTRING::from(*o).as_ptr() as isize);
-            }
-        };
-        let slider = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                      page: usize,
-                      y: i32,
-                      id: u16,
-                      vid: u16,
-                      min: i32,
-                      max: i32| {
-            let tb = add(
-                Some(page),
-                "msctls_trackbar32",
-                "",
-                c::TBS_NOTICKS,
-                0,
-                (CTRL_X - 4, y, CTRL_W + 8, 30),
-                id,
-                font,
-            );
-            send(tb, c::TBM_SETRANGEMIN, 0, min as isize);
-            send(tb, c::TBM_SETRANGEMAX, 0, max as isize);
-            send(tb, c::TBM_SETPAGESIZE, 0, 4);
-            add(
-                Some(page),
-                "STATIC",
-                "",
-                c::SS_NOPREFIX,
-                0,
-                (VALUE_X, y + 5, 70, 22),
-                vid,
-                font,
-            );
-        };
-        let check = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                     page: usize,
-                     y: i32,
-                     id: u16,
-                     text: &str| {
-            add(
-                Some(page),
-                "BUTTON",
-                text,
-                c::BS_AUTOCHECKBOX,
-                0,
-                (X0, y, 490, 26),
-                id,
-                font,
-            );
-        };
-        let note = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                    page: usize,
-                    y: i32,
-                    hgt: i32,
-                    id: u16,
-                    text: &str| {
-            add(
-                Some(page),
-                "STATIC",
-                text,
-                c::SS_NOPREFIX,
-                0,
-                (X0 + 20, y, 470, hgt),
-                id,
-                font,
-            );
-        };
-        let button = |add: &mut dyn FnMut(
-            Option<usize>,
-            &str,
-            &str,
-            u32,
-            u32,
-            (i32, i32, i32, i32),
-            u16,
-            HFONT,
-        ) -> HWND,
-                      page: usize,
-                      r: (i32, i32, i32, i32),
-                      id: u16,
-                      text: &str| {
-            add(Some(page), "BUTTON", text, c::BS_PUSHBUTTON, 0, r, id, font);
-        };
-
-        // General.
-        check(
-            &mut add,
-            0,
-            66,
-            AUTOSTART,
-            "Start Berth automatically when I sign in to Windows",
-        );
-        note(&mut add, 0, 94, 40, AUTOSTART_NOTE, "");
-        check(&mut add, 0, 136, SHOWDOCK, "Show the dock");
-        check(
-            &mut add,
-            0,
-            166,
-            TASKBAR,
-            "Hide the Windows taskbar automatically while Berth is running",
-        );
-        note(
-            &mut add,
-            0,
-            192,
-            52,
-            TASKBAR_NOTE,
-            "Move the pointer to the taskbar's edge to bring it back. At the bottom Berth uses \
-             Windows' own auto-hide; on the left, top or right Berth hides the taskbar itself. \
-             Your setting comes back when you turn this off or quit Berth.",
-        );
-        label(&mut add, 0, 256, "Display");
-        combo(&mut add, 0, 254, DISPLAY, &[]);
-        label(&mut add, 0, 298, "Position on screen");
-        combo(&mut add, 0, 296, POSITION, &["Bottom", "Left", "Right"]);
-        note(
-            &mut add,
-            0,
-            342,
-            44,
-            BG_NOTE,
-            "Berth runs quietly in the background and keeps an icon in the notification area \
-             (near the clock). Closing this window does not quit Berth.",
-        );
-        button(
-            &mut add,
-            0,
-            (X0, 400, 190, 30),
-            RESTORE,
-            "Restore default settings\u{2026}",
-        );
-        button(
-            &mut add,
-            0,
-            (X0 + 200, 400, 150, 30),
-            OPENFOLDER,
-            "Open settings folder",
-        );
-        button(&mut add, 0, (X0, 440, 190, 30), QUIT, "Quit Berth");
-
-        // Appearance.
-        label(&mut add, 1, 68, "Theme");
-        combo(&mut add, 1, 66, THEME, &["Match Windows", "Light", "Dark"]);
-        label(&mut add, 1, 112, "Icon size");
-        slider(&mut add, 1, 110, SIZE, SIZE_V, 24, 128);
-        label(&mut add, 1, 156, "Space between icons");
-        slider(&mut add, 1, 154, SPACING, SPACING_V, 0, 32);
-        label(&mut add, 1, 200, "Distance from screen edge");
-        slider(&mut add, 1, 198, MARGIN, MARGIN_V, 0, 64);
-        label(&mut add, 1, 244, "Background opacity");
-        slider(&mut add, 1, 242, OPACITY, OPACITY_V, 20, 100);
-        label(&mut add, 1, 290, "Hover effect");
-        combo(&mut add, 1, 288, EFFECT, &["Magnify", "Lift", "Highlight"]);
-        label(&mut add, 1, 334, "Magnification");
-        slider(&mut add, 1, 332, MAG, MAG_V, 110, 200);
-
-        // Behavior.
-        label(&mut add, 2, 68, "Animations");
-        combo(
-            &mut add,
-            2,
-            66,
-            ANIM,
-            &["Match Windows setting", "On", "Off"],
-        );
-        check(
-            &mut add,
-            2,
-            112,
-            DOTS,
-            "Show a dot under apps that are running",
-        );
-        check(
-            &mut add,
-            2,
-            144,
-            RUNAPPS,
-            "Also show running apps that aren't pinned",
-        );
-        check(&mut add, 2, 176, AUTOHIDE, "Automatically hide the dock");
-        check(
-            &mut add,
-            2,
-            208,
-            FULLSCREEN,
-            "Hide the dock while an app is full screen",
-        );
-        note(
-            &mut add,
-            2,
-            244,
-            80,
-            BEHAVIOR_NOTE,
-            "When the dock is hidden automatically, rest the pointer against the screen edge \
-             where the dock lives to bring it back. Auto-hide works best on an edge without the \
-             taskbar, or with the taskbar set to hide automatically.",
-        );
-
-        // Apps.
-        let list = add(
-            Some(3),
-            "SysListView32",
-            "",
-            c::LVS_REPORT
-                | c::LVS_SINGLESEL
-                | c::LVS_SHOWSELALWAYS
-                | c::LVS_SHAREIMAGELISTS
-                | c::LVS_EDITLABELS,
-            0x200, // WS_EX_CLIENTEDGE
-            (X0, 62, 496, 316),
-            LIST,
-            font,
-        );
-        send(
-            list,
-            c::LVM_SETEXTENDEDLISTVIEWSTYLE,
-            c::LVS_EX_FULLROWSELECT | c::LVS_EX_DOUBLEBUFFER,
-            (c::LVS_EX_FULLROWSELECT | c::LVS_EX_DOUBLEBUFFER) as isize,
-        );
-        send(
-            list,
-            c::LVM_SETIMAGELIST,
-            c::LVSIL_SMALL,
-            crate::apps::system_image_list(),
-        );
-        for (i, (name, wdt)) in [("Name", 190), ("Opens", 280)].iter().enumerate() {
-            let text = HSTRING::from(*name);
-            let col = LVCOLUMNW {
-                mask: windows::Win32::UI::Controls::LVCOLUMNW_MASK(c::LVCF_TEXT | c::LVCF_WIDTH),
-                cx: (*wdt as f32 * scale) as i32,
-                pszText: PWSTR(text.as_ptr() as *mut u16),
-                ..Default::default()
-            };
-            send(list, c::LVM_INSERTCOLUMNW, i, &col as *const _ as isize);
-        }
-        button(&mut add, 3, (X0, 388, 118, 30), ADDAPP, "Add app\u{2026}");
-        button(
-            &mut add,
-            3,
-            (X0 + 126, 388, 118, 30),
-            ADDFILE,
-            "Add file\u{2026}",
-        );
-        button(
-            &mut add,
-            3,
-            (X0 + 252, 388, 118, 30),
-            ADDFOLDER,
-            "Add folder\u{2026}",
-        );
-        button(&mut add, 3, (X0, 426, 118, 30), RENAME, "Rename");
-        button(&mut add, 3, (X0 + 126, 426, 118, 30), UP, "Move up");
-        button(&mut add, 3, (X0 + 252, 426, 118, 30), DOWN, "Move down");
-        button(&mut add, 3, (X0 + 378, 426, 118, 30), REMOVE, "Remove");
-        add(
-            Some(3),
-            "STATIC",
-            "Tip: you can also drag files, folders or shortcuts onto the dock, and drag icons on the dock to reorder them.",
-            c::SS_NOPREFIX,
-            0,
-            (X0, 466, 496, 40),
-            APPS_NOTE,
-            font,
-        );
-
-        // About.
-        let about = format!(
-            "Berth {}\nA lightweight, Mac-style dock for Windows 11.\n\n\
-             Free and open source under the MIT License.\n\n\
-             Privacy: Berth has no accounts, ads, telemetry or cloud features. It only goes \
-             online to check this project's GitHub releases for updates (see Updates). Your \
-             settings and a small troubleshooting log stay on this PC in:\n{}",
-            crate::VERSION,
-            util::data_dir().display()
-        );
-        add(
-            Some(ABOUT_PAGE),
-            "STATIC",
-            &about,
-            c::SS_NOPREFIX,
-            0,
-            (X0, 66, 496, 220),
-            ABOUT_TEXT,
-            font,
-        );
-        button(
-            &mut add,
-            ABOUT_PAGE,
-            (X0, 296, 190, 30),
-            WEBSITE,
-            "Open project page",
-        );
-        button(
-            &mut add,
-            ABOUT_PAGE,
-            (X0 + 200, 296, 150, 30),
-            LOGS,
-            "Open log folder",
-        );
-
-        // Updates.
-        let u = UPDATES_PAGE;
-        add(
-            Some(u),
-            "STATIC",
-            &format!("Installed version: Berth {}", crate::VERSION),
-            c::SS_NOPREFIX,
-            0,
-            (X0, 68, 496, 22),
-            UPD_VERSION,
-            font,
-        );
-        button(
-            &mut add,
-            u,
-            (X0, 102, 250, 34),
-            UPD_CHECK,
-            "Check for updates and install",
-        );
-        add(
-            Some(u),
-            "STATIC",
-            "",
-            c::SS_NOPREFIX,
-            0,
-            (X0, 146, 496, 40),
-            UPD_STATUS,
-            font,
-        );
-        check(
-            &mut add,
-            u,
-            196,
-            UPD_AUTO,
-            "Notify me when a new version is available",
-        );
-        note(
-            &mut add,
-            u,
-            230,
-            150,
-            UPD_NOTE,
-            "Updates come only from the official releases of this project on GitHub \
-             (github.com/tahminbinmoin/berth). Berth connects to GitHub only when you press the \
-             button above, or, if notifications are on, at start-up and twice a day to look for a \
-             new version. Nothing about you or your PC is sent.\n\n\
-             Every download is checked against its published SHA-256 checksum before it is \
-             installed. Berth then replaces its own program file and restarts. Your settings, \
-             pinned apps and startup choice are kept.",
-        );
-        button(
-            &mut add,
-            u,
-            (X0, 392, 190, 30),
-            UPD_RELEASES,
-            "View releases on GitHub",
-        );
-    }
-
-    with_dash(|d| {
-        d.font = font;
-        d.bold = bold;
-        d.title = title;
-        d.h = map;
-        d.pages = pages;
-        d.all = all;
-        d.items.clear();
-    });
-}
-
-fn destroy_controls() {
-    let Some((all, fonts)) = with_dash(|d| {
-        let all = std::mem::take(&mut d.all);
-        let fonts = [d.font, d.bold, d.title];
-        d.h.clear();
-        d.pages.clear();
-        (all, fonts)
-    }) else {
-        return;
-    };
-    for c in all {
+fn request_frame() {
+    if let Some(h) = hwnd() {
         unsafe {
-            let _ = DestroyWindow(c);
+            let _ = PostMessageW(Some(h), WM_APP_FRAME, WPARAM(0), LPARAM(0));
         }
-    }
-    for f in fonts {
-        ui::delete_font(f);
     }
 }
 
-fn show_page(page: usize) {
-    let Some((pages, nav)) = with_dash(|d| {
-        d.page = page;
-        (d.pages.clone(), d.h.get(&NAV).copied().unwrap_or_default())
-    }) else {
+// ----- frame ---------------------------------------------------------------------
+
+fn snapshot(displays: &[(String, String)]) -> Option<Snap> {
+    with_app(|a| Snap {
+        s: a.settings.clone(),
+        hidden: a.dock.user_hidden,
+        auto: autostart::state(),
+        displays: displays.to_vec(),
+    })
+}
+
+/// Runs one UI frame with the pending input, presents it, then executes
+/// any resulting commands.
+fn frame() {
+    let Some(displays) = with_dash(|d| d.displays.clone()) else {
         return;
     };
-    for (i, ctrls) in pages.iter().enumerate() {
-        for &c in ctrls {
-            unsafe {
-                let _ = ShowWindow(c, if i == page { SW_SHOW } else { SW_HIDE });
-            }
-        }
-    }
-    send(nav, c::LB_SETCURSEL, page, 0);
-}
-
-// ----- values --------------------------------------------------------------
-
-fn set_check(id: u16, on: bool) {
-    send(ctl(id), c::BM_SETCHECK, on as usize, 0);
-}
-fn get_check(id: u16) -> bool {
-    send(ctl(id), c::BM_GETCHECK, 0, 0) == 1
-}
-fn set_combo(id: u16, i: usize) {
-    send(ctl(id), c::CB_SETCURSEL, i, 0);
-}
-fn get_combo(id: u16) -> usize {
-    send(ctl(id), c::CB_GETCURSEL, 0, 0).max(0) as usize
-}
-fn set_slider(id: u16, v: u32) {
-    let h = ctl(id);
-    if unsafe { GetCapture() } != h {
-        send(h, c::TBM_SETPOS, 1, v as isize);
-    }
-}
-fn get_slider(id: u16) -> u32 {
-    send(ctl(id), c::TBM_GETPOS, 0, 0).max(0) as u32
-}
-
-fn value_labels(s: &Settings) {
-    ui::set_text(ctl(SIZE_V), &format!("{} px", s.icon_size));
-    ui::set_text(ctl(SPACING_V), &format!("{} px", s.spacing));
-    ui::set_text(ctl(MARGIN_V), &format!("{} px", s.edge_margin));
-    ui::set_text(ctl(OPACITY_V), &format!("{}%", s.opacity));
-    ui::set_text(ctl(MAG_V), &format!("{}%", s.magnification));
-    let magnify = s.hover_effect == HoverEffect::Magnify;
+    let Some(snap) = snapshot(&displays) else {
+        request_frame();
+        return;
+    };
+    let (status, busy) = UPDATE_STATUS.with(|s| s.borrow().clone());
+    let out = with_dash(|d| {
+        let cmds = d.run(&snap, &status, busy);
+        let again = d.st.want_frame;
+        d.st.want_frame = false;
+        d.input.pressed = false;
+        d.input.released = false;
+        d.input.wheel = 0.0;
+        d.input.key = None;
+        (cmds, again, d.hwnd)
+    });
+    let Some((cmds, again, h)) = out else { return };
     unsafe {
-        let _ = EnableWindow(ctl(MAG), magnify);
-        let _ = EnableWindow(ctl(MAG_V), magnify);
+        let _ = InvalidateRect(Some(h), None, false);
+    }
+    position_edits();
+    run_cmds(cmds);
+    if again {
+        request_frame();
     }
 }
 
-fn load_values() {
-    let Some((s, hidden)) = with_app(|a| (a.settings.clone(), a.dock.user_hidden)) else {
-        // App busy; try again shortly.
-        notify_changed();
-        return;
-    };
-
-    // General.
-    let auto = autostart::state();
-    set_check(AUTOSTART, auto == autostart::State::On);
-    ui::set_text(
-        ctl(AUTOSTART_NOTE),
-        match auto {
-            autostart::State::On => "Berth will open in the background each time you sign in.",
-            autostart::State::Off => "Off. Berth only runs when you open it.",
-            autostart::State::DisabledByWindows => {
-                "Turned off in Windows Settings > Apps > Startup. Switch \u{201c}Berth\u{201d} on there to use it."
-            }
-        },
-    );
-    set_check(SHOWDOCK, !hidden);
-    set_check(TASKBAR, s.hide_taskbar);
-
-    let mons = system::monitors();
-    let disp = ctl(DISPLAY);
-    send(disp, c::CB_RESETCONTENT, 0, 0);
-    let mut devices = vec!["primary".to_string()];
-    send(
-        disp,
-        c::CB_ADDSTRING,
-        0,
-        HSTRING::from("Main display").as_ptr() as isize,
-    );
-    for (i, m) in mons.iter().enumerate() {
-        send(
-            disp,
-            c::CB_ADDSTRING,
-            0,
-            HSTRING::from(m.label(i)).as_ptr() as isize,
-        );
-        devices.push(m.device.clone());
+impl Dash {
+    fn scale(&self) -> f32 {
+        self.dpi as f32 / 96.0
     }
-    let sel = devices
-        .iter()
-        .position(|d| d.eq_ignore_ascii_case(&s.display))
-        .unwrap_or(0);
-    set_combo(DISPLAY, sel);
-    with_dash(|d| d.displays = devices);
-    set_combo(
-        POSITION,
-        match s.position {
-            Edge::Bottom => 0,
-            Edge::Left => 1,
-            Edge::Right => 2,
-        },
-    );
 
-    // Appearance.
-    set_combo(
-        THEME,
-        match s.theme {
-            ThemeMode::System => 0,
-            ThemeMode::Light => 1,
-            ThemeMode::Dark => 2,
-        },
-    );
-    set_slider(SIZE, s.icon_size);
-    set_slider(SPACING, s.spacing);
-    set_slider(MARGIN, s.edge_margin);
-    set_slider(OPACITY, s.opacity);
-    set_combo(
-        EFFECT,
-        match s.hover_effect {
-            HoverEffect::Magnify => 0,
-            HoverEffect::Lift => 1,
-            HoverEffect::Highlight => 2,
-        },
-    );
-    set_slider(MAG, s.magnification);
-    value_labels(&s);
-
-    // Behavior.
-    set_combo(
-        ANIM,
-        match s.animations {
-            AnimationMode::System => 0,
-            AnimationMode::On => 1,
-            AnimationMode::Off => 2,
-        },
-    );
-    set_check(DOTS, s.show_running_indicators);
-    set_check(RUNAPPS, s.show_running_apps);
-    set_check(AUTOHIDE, s.auto_hide);
-    set_check(FULLSCREEN, s.hide_in_fullscreen);
-    set_check(UPD_AUTO, s.check_updates_on_startup);
-    UPDATE_STATUS.with(|st| {
-        let (text, busy) = st.borrow().clone();
-        ui::set_text(ctl(UPD_STATUS), &text);
+    fn run(&mut self, snap: &Snap, status: &str, busy: bool) -> Vec<Cmd> {
+        let s = self.scale();
+        let mut rc = RECT::default();
         unsafe {
-            let _ = EnableWindow(ctl(UPD_CHECK), !busy);
+            let _ = GetClientRect(self.hwnd, &mut rc);
+        }
+        let (pw, ph) = (
+            (rc.right - rc.left).max(1) as u32,
+            (rc.bottom - rc.top).max(1) as u32,
+        );
+        if self.pm.as_ref().map(|p| (p.width(), p.height())) != Some((pw, ph)) {
+            self.pm = Pixmap::new(pw, ph);
+        }
+        let dark = system::is_dark(snap.s.theme);
+        if self.last_dark != Some(dark) {
+            self.last_dark = Some(dark);
+            self.text.clear();
+            apply_title_bar(self.hwnd, dark);
+            self.refresh_edit_colors(dark);
+        }
+        let accent = if dark { self.accent.0 } else { self.accent.1 };
+        let pal = Palette::new(dark, accent);
+        let mut cmds = Vec::new();
+        let Some(mut pm) = self.pm.take() else {
+            return cmds;
+        };
+        {
+            let modal = self.sheet.is_some();
+            let mut ui = Ui::new(&mut pm, s, pal, &self.input, &mut self.st, &mut self.text);
+            let dropdown_open = ui.blocked;
+            ui.blocked = dropdown_open || modal;
+            if ui.input.pressed {
+                ui.st.hot = None;
+            }
+            sidebar(&mut ui, &mut self.page, self.logo.as_ref());
+            let page = self.page;
+            let area = RectF::new(X0 - 4.0, TOP, W - X0, H - TOP);
+            ui.set_clip(Some(area));
+            ui.dy = self.scroll[page];
+            let title_y = 26.0;
+            let end = {
+                let (dy, clip_guard) = (ui.dy, ());
+                let _ = clip_guard;
+                ui.dy = 0.0;
+                ui.set_clip(None);
+                ui.text_at(
+                    PAGES[page].0,
+                    X0,
+                    title_y,
+                    Font::Title,
+                    28.0,
+                    ui.p.text,
+                    CW,
+                    false,
+                );
+                ui.set_clip(Some(area));
+                ui.dy = dy;
+                match page {
+                    0 => page_general(&mut ui, snap, &mut cmds),
+                    1 => page_appearance(&mut ui, snap, &mut cmds),
+                    2 => page_behavior(&mut ui, snap, &mut cmds),
+                    3 => page_apps(
+                        &mut ui,
+                        snap,
+                        &mut cmds,
+                        &mut self.icons,
+                        &mut self.icons_pending,
+                        self.rename,
+                    ),
+                    4 => page_updates(&mut ui, snap, &mut cmds, status, busy),
+                    _ => page_about(&mut ui, &mut cmds, self.logo.as_ref()),
+                }
+            };
+            self.content_h[page] = end - TOP + 24.0;
+            ui.set_clip(None);
+            ui.dy = 0.0;
+            self.scroll[page] = ui.scroll_area(area, self.content_h[page], self.scroll[page]);
+            ui.blocked = dropdown_open;
+            if let Some(sheet) = self.sheet.as_mut() {
+                sheet_ui(
+                    &mut ui,
+                    sheet,
+                    &mut cmds,
+                    &mut self.icons,
+                    &mut self.icons_pending,
+                );
+            }
+            ui.finish();
+        }
+        // Presentation buffer (BGRA).
+        let data = pm.data();
+        if self.bgra.len() != data.len() {
+            self.bgra = vec![0; data.len()];
+        }
+        for (d, src) in self.bgra.chunks_exact_mut(4).zip(data.chunks_exact(4)) {
+            d[0] = src[2];
+            d[1] = src[1];
+            d[2] = src[0];
+            d[3] = 255;
+        }
+        self.pm = Some(pm);
+        if self.icons_pending {
+            unsafe { SetTimer(Some(self.hwnd), TIMER_ICONS, 30, None) };
+        }
+        cmds
+    }
+
+    fn refresh_edit_colors(&mut self, dark: bool) {
+        let pal = Palette::new(dark, None);
+        let (r, g, b) = Palette::rgb(pal.input);
+        let (tr, tg, tb) = Palette::rgb(pal.text);
+        if !self.edit_brush.is_invalid() {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(self.edit_brush.0));
+            }
+        }
+        let bg = COLORREF(r as u32 | (g as u32) << 8 | (b as u32) << 16);
+        let fg = COLORREF(tr as u32 | (tg as u32) << 8 | (tb as u32) << 16);
+        self.edit_brush = unsafe { CreateSolidBrush(bg) };
+        self.edit_colors = (bg, fg);
+        unsafe {
+            let _ = InvalidateRect(Some(self.search_edit), None, true);
+            let _ = InvalidateRect(Some(self.rename_edit), None, true);
+        }
+    }
+}
+
+fn apply_title_bar(h: HWND, dark: bool) {
+    let pal = Palette::new(dark, None);
+    let (r, g, b) = Palette::rgb(pal.bg);
+    let caption = r as u32 | (g as u32) << 8 | (b as u32) << 16;
+    let on: i32 = dark as i32;
+    unsafe {
+        // DWMWA_USE_IMMERSIVE_DARK_MODE = 20, DWMWA_CAPTION_COLOR = 35
+        let _ = DwmSetWindowAttribute(h, DWMWINDOWATTRIBUTE(20), &on as *const i32 as *const _, 4);
+        let _ = DwmSetWindowAttribute(
+            h,
+            DWMWINDOWATTRIBUTE(35),
+            &caption as *const u32 as *const _,
+            4,
+        );
+    }
+}
+
+fn update_edit_font() {
+    with_dash(|d| {
+        let px = (14.0 * d.scale()).round() as i32;
+        if !d.edit_font.is_invalid() {
+            ui::delete_font(d.edit_font);
+        }
+        d.edit_font = unsafe {
+            windows::Win32::Graphics::Gdi::CreateFontW(
+                -px,
+                0,
+                0,
+                0,
+                400,
+                0,
+                0,
+                0,
+                windows::Win32::Graphics::Gdi::DEFAULT_CHARSET,
+                windows::Win32::Graphics::Gdi::OUT_TT_PRECIS,
+                windows::Win32::Graphics::Gdi::CLIP_DEFAULT_PRECIS,
+                windows::Win32::Graphics::Gdi::CLEARTYPE_QUALITY,
+                0,
+                w!("Segoe UI Variable Text"),
+            )
+        };
+        for e in [d.search_edit, d.rename_edit] {
+            ui::send(e, WM_SETFONT, d.edit_font.0 as usize, 1);
         }
     });
-
-    // Apps.
-    let changed = with_dash(|d| d.items != s.items).unwrap_or(false);
-    if changed {
-        load_list(&s.items);
-    }
-    update_app_buttons();
 }
 
-fn load_list(items: &[PinnedItem]) {
-    let list = ctl(LIST);
-    let keep = with_dash(|d| d.select_after_refresh.take())
-        .flatten()
-        .or_else(|| selected_index());
-    send(list, c::LVM_DELETEALLITEMS, 0, 0);
-    for (i, it) in items.iter().enumerate() {
-        let name = HSTRING::from(it.name.as_str());
-        let mut item = LVITEMW {
-            mask: windows::Win32::UI::Controls::LIST_VIEW_ITEM_FLAGS(
-                c::LVIF_TEXT | c::LVIF_IMAGE | c::LVIF_PARAM,
-            ),
-            iItem: i as i32,
-            pszText: PWSTR(name.as_ptr() as *mut u16),
-            iImage: crate::apps::system_icon_index(&it.target),
-            lParam: LPARAM(i as isize),
-            ..Default::default()
-        };
-        send(list, c::LVM_INSERTITEMW, 0, &mut item as *mut _ as isize);
-        let target = HSTRING::from(describe_target(&it.target));
-        let sub = LVITEMW {
-            iSubItem: 1,
-            pszText: PWSTR(target.as_ptr() as *mut u16),
-            ..Default::default()
-        };
-        send(list, c::LVM_SETITEMTEXTW, i, &sub as *const _ as isize);
+// ----- layout helpers ----------------------------------------------------------------
+
+const ROW: f32 = 68.0;
+
+/// Draws a card holding `rows` rows of the given heights starting at `y`;
+/// returns the y of each row and the y after the card.
+fn card_rows(ui: &mut Ui, y: f32, heights: &[f32]) -> (Vec<f32>, f32) {
+    let total: f32 = heights.iter().sum();
+    ui.card(RectF::new(X0, y, CW, total));
+    let mut ys = Vec::new();
+    let mut cy = y;
+    for (i, h) in heights.iter().enumerate() {
+        if i > 0 {
+            ui.divider(X0 + 1.0, cy, CW - 2.0);
+        }
+        ys.push(cy);
+        cy += h;
     }
-    if let Some(k) = keep {
-        if !items.is_empty() {
-            select_index(k.min(items.len() - 1));
+    (ys, cy + 8.0)
+}
+
+fn right() -> f32 {
+    X0 + CW - 20.0
+}
+
+fn label(ui: &mut Ui, y: f32, h: f32, title: &str, desc: &str, enabled: bool) {
+    ui.row_label(X0 + 20.0, y, h, CW - 340.0, title, desc, enabled);
+}
+
+fn section(ui: &mut Ui, y: f32, text: &str) -> f32 {
+    ui.text_at(
+        text,
+        X0 + 2.0,
+        y + 8.0,
+        Font::Strong,
+        14.0,
+        ui.p.text,
+        CW,
+        false,
+    );
+    y + 36.0
+}
+
+fn strings(v: &[&str]) -> Vec<String> {
+    v.iter().map(|s| s.to_string()).collect()
+}
+
+fn set(cmds: &mut Vec<Cmd>, f: impl FnOnce(&mut Settings) + 'static) {
+    cmds.push(Cmd::Set(Box::new(f)));
+}
+
+// ----- sidebar ---------------------------------------------------------------------
+
+fn sidebar(ui: &mut Ui, page: &mut usize, logo: Option<&Pixmap>) {
+    if let Some(l) = logo {
+        let px = (36.0 * ui.s).round() as u32;
+        if let Some(small) = crate::icons::scale_to(l, px) {
+            ui.image(&small, 22.0, 22.0, 1.0);
         }
     }
-    with_dash(|d| d.items = items.to_vec());
+    ui.text_at(
+        "Berth",
+        70.0,
+        22.0,
+        Font::Strong,
+        15.0,
+        ui.p.text,
+        200.0,
+        false,
+    );
+    ui.text_at(
+        "Dock for Windows 11",
+        70.0,
+        42.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        200.0,
+        false,
+    );
+    for (i, (name, glyph)) in PAGES.iter().enumerate() {
+        let r = RectF::new(12.0, 92.0 + i as f32 * 40.0, SIDEBAR - 24.0, 36.0);
+        if ui.nav_item(idx("nav", i), r, *glyph, name, *page == i) && *page != i {
+            *page = i;
+            ui.st.want_frame = true;
+        }
+    }
+    let v = format!("Version {}", crate::VERSION);
+    ui.text_at(
+        &v,
+        24.0,
+        H - 36.0,
+        Font::Body,
+        12.0,
+        ui.p.text3,
+        200.0,
+        false,
+    );
+}
+
+// ----- pages ------------------------------------------------------------------------
+
+fn page_general(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
+    let s = &snap.s;
+    let mut y = TOP;
+    y = section(ui, y, "Startup");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    let auto_desc = match snap.auto {
+        autostart::State::On => "Berth opens quietly in the background when you sign in",
+        autostart::State::Off => "Off: Berth only runs when you open it",
+        autostart::State::DisabledByWindows => "Turned off in Windows Settings > Apps > Startup",
+    };
+    label(ui, rows[0], ROW, "Start with Windows", auto_desc, true);
+    if let Some(v) = ui.toggle(
+        id("autostart"),
+        right(),
+        rows[0] + ROW / 2.0,
+        snap.auto == autostart::State::On,
+        true,
+    ) {
+        cmds.push(Cmd::Autostart(v));
+    }
+    y = section(ui, ny + 8.0, "Dock");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Show the dock",
+        "Hide it without quitting Berth",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("showdock"),
+        right(),
+        rows[0] + ROW / 2.0,
+        !snap.hidden,
+        true,
+    ) {
+        cmds.push(Cmd::ShowDock(v));
+    }
+    label(
+        ui,
+        rows[1],
+        ROW,
+        "Display",
+        "The screen that shows the dock",
+        true,
+    );
+    let names: Vec<String> = snap.displays.iter().map(|d| d.0.clone()).collect();
+    let sel = snap
+        .displays
+        .iter()
+        .position(|d| d.1.eq_ignore_ascii_case(&s.display))
+        .unwrap_or(0);
+    if let Some(i) = ui.dropdown(
+        id("display"),
+        RectF::new(right() - 240.0, rows[1] + 18.0, 240.0, 32.0),
+        &names,
+        sel,
+        true,
+    ) {
+        if let Some(dev) = snap.displays.get(i).map(|d| d.1.clone()) {
+            set(cmds, move |s| s.display = dev);
+        }
+    }
+    label(
+        ui,
+        rows[2],
+        ROW,
+        "Position",
+        "The screen edge the dock sits on",
+        true,
+    );
+    let pos = match s.position {
+        Edge::Bottom => 0,
+        Edge::Left => 1,
+        Edge::Right => 2,
+    };
+    if let Some(i) = ui.dropdown(
+        id("position"),
+        RectF::new(right() - 240.0, rows[2] + 18.0, 240.0, 32.0),
+        &strings(&["Bottom", "Left", "Right"]),
+        pos,
+        true,
+    ) {
+        let e = [Edge::Bottom, Edge::Left, Edge::Right][i.min(2)];
+        set(cmds, move |s| s.position = e);
+    }
+    y = section(ui, ny + 8.0, "Windows taskbar");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Hide the Windows taskbar",
+        "It comes back when you move the pointer to its edge. Restored when you quit Berth.",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("taskbar"),
+        right(),
+        rows[0] + ROW / 2.0,
+        s.hide_taskbar,
+        true,
+    ) {
+        set(cmds, move |s| s.hide_taskbar = v);
+    }
+    y = section(ui, ny + 8.0, "Berth");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Restore default settings",
+        "Your pinned apps are kept",
+        true,
+    );
+    if ui.button(
+        id("restore"),
+        RectF::new(right() - 120.0, rows[0] + 18.0, 120.0, 32.0),
+        "Restore",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::Restore);
+    }
+    let folder = util::data_dir().display().to_string();
+    label(ui, rows[1], ROW, "Settings and log folder", &folder, true);
+    if ui.button(
+        id("folder"),
+        RectF::new(right() - 120.0, rows[1] + 18.0, 120.0, 32.0),
+        "Open",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::OpenFolder);
+    }
+    label(
+        ui,
+        rows[2],
+        ROW,
+        "Quit Berth",
+        "Closes the dock and puts the taskbar back to normal",
+        true,
+    );
+    if ui.button(
+        id("quit"),
+        RectF::new(right() - 120.0, rows[2] + 18.0, 120.0, 32.0),
+        "Quit",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::Quit);
+    }
+    ny
+}
+
+fn slider_row(
+    ui: &mut Ui,
+    cmds: &mut Vec<Cmd>,
+    y: f32,
+    key: &str,
+    title: &str,
+    desc: &str,
+    range: (u32, u32),
+    value: u32,
+    unit: &str,
+    enabled: bool,
+    apply: fn(&mut Settings, u32),
+) {
+    label(ui, y, ROW, title, desc, enabled);
+    let text = format!("{value}{unit}");
+    let r = RectF::new(right() - 220.0, y + ROW / 2.0 - 12.0, 220.0, 24.0);
+    if let Some(v) = ui.slider(id(key), r, range.0, range.1, value, &text, enabled) {
+        set(cmds, move |s| apply(s, v));
+    }
+}
+
+fn page_appearance(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
+    let s = &snap.s;
+    let mut y = section(ui, TOP, "Look");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Theme",
+        "Light, dark, or the same as Windows",
+        true,
+    );
+    let t = match s.theme {
+        ThemeMode::System => 0,
+        ThemeMode::Light => 1,
+        ThemeMode::Dark => 2,
+    };
+    if let Some(i) = ui.dropdown(
+        id("theme"),
+        RectF::new(right() - 240.0, rows[0] + 18.0, 240.0, 32.0),
+        &strings(&["Match Windows", "Light", "Dark"]),
+        t,
+        true,
+    ) {
+        let m = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark][i.min(2)];
+        set(cmds, move |s| s.theme = m);
+    }
+    slider_row(
+        ui,
+        cmds,
+        rows[1],
+        "opacity",
+        "Background opacity",
+        "How see-through the dock is",
+        (20, 100),
+        s.opacity,
+        "%",
+        true,
+        |s, v| s.opacity = v,
+    );
+    y = section(ui, ny + 8.0, "Size and spacing");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW]);
+    slider_row(
+        ui,
+        cmds,
+        rows[0],
+        "size",
+        "Icon size",
+        "Size of the icons at rest",
+        (24, 128),
+        s.icon_size,
+        " px",
+        true,
+        |s, v| s.icon_size = v,
+    );
+    slider_row(
+        ui,
+        cmds,
+        rows[1],
+        "spacing",
+        "Space between icons",
+        "",
+        (0, 32),
+        s.spacing,
+        " px",
+        true,
+        |s, v| s.spacing = v,
+    );
+    slider_row(
+        ui,
+        cmds,
+        rows[2],
+        "margin",
+        "Distance from screen edge",
+        "",
+        (0, 64),
+        s.edge_margin,
+        " px",
+        true,
+        |s, v| s.edge_margin = v,
+    );
+    y = section(ui, ny + 8.0, "Hover");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Hover effect",
+        "What happens when you point at an icon",
+        true,
+    );
+    let e = match s.hover_effect {
+        HoverEffect::Magnify => 0,
+        HoverEffect::Lift => 1,
+        HoverEffect::Highlight => 2,
+    };
+    if let Some(i) = ui.dropdown(
+        id("effect"),
+        RectF::new(right() - 240.0, rows[0] + 18.0, 240.0, 32.0),
+        &strings(&["Magnify", "Lift", "Highlight"]),
+        e,
+        true,
+    ) {
+        let h = [
+            HoverEffect::Magnify,
+            HoverEffect::Lift,
+            HoverEffect::Highlight,
+        ][i.min(2)];
+        set(cmds, move |s| s.hover_effect = h);
+    }
+    let magnify = s.hover_effect == HoverEffect::Magnify;
+    slider_row(
+        ui,
+        cmds,
+        rows[1],
+        "mag",
+        "Magnification",
+        "How much icons grow (Magnify only)",
+        (110, 200),
+        s.magnification,
+        "%",
+        magnify,
+        |s, v| s.magnification = v,
+    );
+    ny
+}
+
+fn page_behavior(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
+    let s = &snap.s;
+    let mut y = section(ui, TOP, "Motion");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Animations",
+        "Magnify, bounce and slide effects",
+        true,
+    );
+    let a = match s.animations {
+        AnimationMode::System => 0,
+        AnimationMode::On => 1,
+        AnimationMode::Off => 2,
+    };
+    if let Some(i) = ui.dropdown(
+        id("anim"),
+        RectF::new(right() - 240.0, rows[0] + 18.0, 240.0, 32.0),
+        &strings(&["Match Windows setting", "On", "Off"]),
+        a,
+        true,
+    ) {
+        let m = [AnimationMode::System, AnimationMode::On, AnimationMode::Off][i.min(2)];
+        set(cmds, move |s| s.animations = m);
+    }
+    y = section(ui, ny + 8.0, "Running apps");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Show running indicators",
+        "A dot under apps that have windows open",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("dots"),
+        right(),
+        rows[0] + ROW / 2.0,
+        s.show_running_indicators,
+        true,
+    ) {
+        set(cmds, move |s| s.show_running_indicators = v);
+    }
+    label(
+        ui,
+        rows[1],
+        ROW,
+        "Show apps that aren't pinned",
+        "Running apps appear after a divider",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("runapps"),
+        right(),
+        rows[1] + ROW / 2.0,
+        s.show_running_apps,
+        true,
+    ) {
+        set(cmds, move |s| s.show_running_apps = v);
+    }
+    y = section(ui, ny + 8.0, "Visibility");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Automatically hide the dock",
+        "Rest the pointer at the screen edge to bring it back",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("autohide"),
+        right(),
+        rows[0] + ROW / 2.0,
+        s.auto_hide,
+        true,
+    ) {
+        set(cmds, move |s| s.auto_hide = v);
+    }
+    label(
+        ui,
+        rows[1],
+        ROW,
+        "Hide during full-screen apps",
+        "Games, videos and presentations",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("fullscreen"),
+        right(),
+        rows[1] + ROW / 2.0,
+        s.hide_in_fullscreen,
+        true,
+    ) {
+        set(cmds, move |s| s.hide_in_fullscreen = v);
+    }
+    ny
+}
+
+fn page_apps(
+    ui: &mut Ui,
+    snap: &Snap,
+    cmds: &mut Vec<Cmd>,
+    icons: &mut IconCache,
+    pending: &mut bool,
+    renaming: Option<usize>,
+) -> f32 {
+    let items = &snap.s.items;
+    let y = TOP + 4.0;
+    if ui.button(
+        id("addapps"),
+        RectF::new(X0, y, 130.0, 32.0),
+        "Add apps",
+        true,
+        true,
+    ) {
+        cmds.push(Cmd::OpenSheet);
+    }
+    if ui.button(
+        id("addfile"),
+        RectF::new(X0 + 140.0, y, 120.0, 32.0),
+        "Add file",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::Browse(false));
+    }
+    if ui.button(
+        id("addfolder"),
+        RectF::new(X0 + 270.0, y, 120.0, 32.0),
+        "Add folder",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::Browse(true));
+    }
+    let y = y + 48.0;
+    if items.is_empty() {
+        let (_, ny) = card_rows(ui, y, &[ROW]);
+        label(
+            ui,
+            y,
+            ROW,
+            "No apps pinned yet",
+            "Use Add apps, or drag files and shortcuts onto the dock",
+            true,
+        );
+        return ny;
+    }
+    let rh = 56.0;
+    let heights = vec![rh; items.len()];
+    let (rows, ny) = card_rows(ui, y, &heights);
+    let px = (24.0 * ui.s).round() as u32;
+    let mut loaded = 0;
+    for (i, it) in items.iter().enumerate() {
+        let ry = rows[i];
+        let cy = ry + rh / 2.0;
+        // Icon (loaded a few per frame so the page opens instantly).
+        let visible = (ry - ui.dy) < H && (ry + rh - ui.dy) > TOP;
+        if visible {
+            let have = icons.peek(&it.target, px);
+            if have.is_none() && loaded < 6 {
+                loaded += 1;
+                let _ = icons.get(&it.target, px);
+            }
+            match icons.peek(&it.target, px) {
+                Some(Some(pm)) => {
+                    let pm = pm.clone();
+                    ui.image(&pm, X0 + 18.0, cy - 12.0, 1.0);
+                }
+                Some(None) => ui.icon('\u{E7C3}', X0 + 30.0, cy, 18.0, ui.p.text2),
+                None => *pending = true,
+            }
+        }
+        let tx = X0 + 56.0;
+        let maxw = CW - 56.0 - 190.0;
+        if renaming == Some(i) {
+            ui.st.want_frame = false;
+            let r = ui.input_frame(RectF::new(tx - 6.0, cy - 16.0, maxw, 32.0), true);
+            RENAME_RECT.with(|c| *c.borrow_mut() = Some(r));
+        } else {
+            let (_, th) = ui.measure(&it.name, Font::Body, 14.0, maxw, false);
+            let desc = describe_target(&it.target);
+            let (_, dh) = ui.measure(&desc, Font::Body, 12.0, maxw, false);
+            let top = cy - (th + dh - 2.0) / 2.0;
+            ui.text_at(&it.name, tx, top, Font::Body, 14.0, ui.p.text, maxw, false);
+            ui.text_at(
+                &desc,
+                tx,
+                top + th - 2.0,
+                Font::Body,
+                12.0,
+                ui.p.text2,
+                maxw,
+                false,
+            );
+        }
+        let bx = right() - 4.0 * 36.0;
+        let b = |k: usize| RectF::new(bx + k as f32 * 36.0, cy - 16.0, 32.0, 32.0);
+        if ui.icon_button(idx("up", i), b(0), '\u{E70E}', i > 0) {
+            cmds.push(Cmd::Move(i, true));
+        }
+        if ui.icon_button(idx("down", i), b(1), '\u{E70D}', i + 1 < items.len()) {
+            cmds.push(Cmd::Move(i, false));
+        }
+        if ui.icon_button(idx("rename", i), b(2), '\u{E70F}', true) {
+            cmds.push(Cmd::StartRename(i));
+        }
+        if ui.icon_button(idx("remove", i), b(3), '\u{E74D}', true) {
+            cmds.push(Cmd::Remove(i));
+        }
+    }
+    let tip = "Tip: drag files, folders or shortcuts onto the dock to add them, and drag icons along the dock to reorder.";
+    let (_, th) = ui.text_at(
+        tip,
+        X0 + 2.0,
+        ny + 6.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        CW,
+        true,
+    );
+    ny + 12.0 + th
 }
 
 fn describe_target(t: &str) -> String {
     let lower = t.to_ascii_lowercase();
-    if lower.starts_with(&crate::apps::APPS_FOLDER_PREFIX.to_ascii_lowercase()) {
+    if lower.starts_with(&apps::APPS_FOLDER_PREFIX.to_ascii_lowercase()) {
         "Installed app".into()
     } else if lower.starts_with("shell:") {
         "Windows location".into()
@@ -1042,363 +1421,842 @@ fn describe_target(t: &str) -> String {
     }
 }
 
-fn selected_index() -> Option<usize> {
-    let r = send(
-        ctl(LIST),
-        c::LVM_GETNEXTITEM,
-        usize::MAX,
-        c::LVNI_SELECTED as isize,
+fn page_updates(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>, status: &str, busy: bool) -> f32 {
+    let y = TOP + 4.0;
+    let hero = 96.0;
+    let (rows, ny) = card_rows(ui, y, &[hero]);
+    let cy = rows[0] + hero / 2.0;
+    ui.circle(X0 + 44.0, cy, 22.0, ui.p.hover);
+    ui.icon('\u{E895}', X0 + 44.0, cy, 22.0, ui.p.accent);
+    let title = format!("You're on Berth {}", crate::VERSION);
+    ui.text_at(
+        &title,
+        X0 + 82.0,
+        cy - 24.0,
+        Font::Strong,
+        18.0,
+        ui.p.text,
+        CW - 300.0,
+        false,
     );
-    (r >= 0).then_some(r as usize)
-}
-
-fn select_index(i: usize) {
-    let list = ctl(LIST);
-    let item = LVITEMW {
-        stateMask: windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(
-            c::LVIS_SELECTED | c::LVIS_FOCUSED,
-        ),
-        state: windows::Win32::UI::Controls::LIST_VIEW_ITEM_STATE_FLAGS(
-            c::LVIS_SELECTED | c::LVIS_FOCUSED,
-        ),
-        ..Default::default()
+    let st = if status.is_empty() {
+        "Check GitHub for a newer version"
+    } else {
+        status
     };
-    send(list, c::LVM_SETITEMSTATE, i, &item as *const _ as isize);
-    send(list, c::LVM_ENSUREVISIBLE, i, 0);
-}
-
-fn update_app_buttons() {
-    let sel = selected_index();
-    let count = with_dash(|d| d.items.len()).unwrap_or(0);
-    unsafe {
-        let _ = EnableWindow(ctl(RENAME), sel.is_some());
-        let _ = EnableWindow(ctl(REMOVE), sel.is_some());
-        let _ = EnableWindow(ctl(UP), matches!(sel, Some(i) if i > 0));
-        let _ = EnableWindow(ctl(DOWN), matches!(sel, Some(i) if i + 1 < count));
+    ui.text_at(
+        st,
+        X0 + 82.0,
+        cy + 4.0,
+        Font::Body,
+        13.0,
+        ui.p.text2,
+        CW - 310.0,
+        true,
+    );
+    let label_b = if busy {
+        "Working\u{2026}"
+    } else {
+        "Check for updates"
+    };
+    if ui.button(
+        id("check"),
+        RectF::new(right() - 170.0, cy - 16.0, 170.0, 32.0),
+        label_b,
+        true,
+        !busy,
+    ) {
+        cmds.push(Cmd::CheckUpdates);
     }
-}
-
-/// Applies a settings change to the dock and saves it.
-fn change(f: impl FnOnce(&mut Settings)) {
-    let s = with_app(|a| {
-        f(&mut a.settings);
-        a.apply();
-        a.settings.clone()
-    });
-    if let Some(s) = s {
-        value_labels(&s);
+    let y = section(ui, ny + 8.0, "Notifications");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Notify me when a new version is available",
+        "Checks GitHub at start-up and twice a day. Installing always asks first.",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("notify"),
+        right(),
+        rows[0] + ROW / 2.0,
+        snap.s.check_updates_on_startup,
+        true,
+    ) {
+        set(cmds, move |s| s.check_updates_on_startup = v);
     }
+    let y = section(ui, ny + 8.0, "Release notes");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "What's new in each version",
+        "github.com/tahminbinmoin/berth/releases",
+        true,
+    );
+    if ui.button(
+        id("releases"),
+        RectF::new(right() - 120.0, rows[0] + 18.0, 120.0, 32.0),
+        "Open",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::OpenUrl(format!("{}/releases", crate::REPO_URL)));
+    }
+    let note = "Updates come only from this project's releases on GitHub. Every download is checked against its \
+                published SHA-256 checksum before it's installed; Berth then replaces its own program file and \
+                restarts. Your settings, pinned apps and startup choice are kept. Nothing about you or your PC is sent.";
+    let (_, th) = ui.text_at(
+        note,
+        X0 + 2.0,
+        ny + 6.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        CW,
+        true,
+    );
+    ny + 12.0 + th
 }
 
-fn on_command(id: u16, code: u16) {
-    match (id, code) {
-        (NAV, c::LBN_SELCHANGE) => {
-            let i = send(ctl(NAV), c::LB_GETCURSEL, 0, 0);
-            if i >= 0 {
-                show_page(i as usize);
-            }
+fn page_about(ui: &mut Ui, cmds: &mut Vec<Cmd>, logo: Option<&Pixmap>) -> f32 {
+    let y = TOP + 4.0;
+    let hero = 112.0;
+    let (rows, ny) = card_rows(ui, y, &[hero]);
+    if let Some(l) = logo {
+        let px = (64.0 * ui.s).round() as u32;
+        if let Some(img) = crate::icons::scale_to(l, px) {
+            ui.image(&img, X0 + 24.0, rows[0] + 24.0, 1.0);
         }
-        (AUTOSTART, c::BN_CLICKED) => {
-            let want = get_check(AUTOSTART);
-            let r = if want {
-                autostart::enable()
+    }
+    ui.text_at(
+        "Berth",
+        X0 + 108.0,
+        rows[0] + 22.0,
+        Font::Title,
+        22.0,
+        ui.p.text,
+        400.0,
+        false,
+    );
+    let v = format!(
+        "Version {}  \u{00B7}  A lightweight, Mac-style dock for Windows 11",
+        crate::VERSION
+    );
+    ui.text_at(
+        &v,
+        X0 + 108.0,
+        rows[0] + 56.0,
+        Font::Body,
+        13.0,
+        ui.p.text2,
+        CW - 130.0,
+        false,
+    );
+    ui.text_at(
+        "Free and open source under the MIT License",
+        X0 + 108.0,
+        rows[0] + 76.0,
+        Font::Body,
+        13.0,
+        ui.p.text2,
+        CW - 130.0,
+        false,
+    );
+    let y = section(ui, ny + 8.0, "Links");
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Project page",
+        "Source code, issues and releases on GitHub",
+        true,
+    );
+    if ui.button(
+        id("project"),
+        RectF::new(right() - 120.0, rows[0] + 18.0, 120.0, 32.0),
+        "Open",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::OpenUrl(crate::REPO_URL.to_string()));
+    }
+    label(
+        ui,
+        rows[1],
+        ROW,
+        "Log folder",
+        "A small troubleshooting log, kept on this PC only",
+        true,
+    );
+    if ui.button(
+        id("logs"),
+        RectF::new(right() - 120.0, rows[1] + 18.0, 120.0, 32.0),
+        "Open",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::OpenFolder);
+    }
+    let note = "Privacy: Berth has no accounts, ads, telemetry or cloud features. It only goes online to check this \
+                project's GitHub releases for updates. Inspired by the idea of clean desktop docks; not affiliated with \
+                Apple, Microsoft or any other dock.";
+    let (_, th) = ui.text_at(
+        note,
+        X0 + 2.0,
+        ny + 6.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        CW,
+        true,
+    );
+    ny + 12.0 + th
+}
+
+// ----- "Add apps" sheet -------------------------------------------------------------
+
+thread_local! {
+    static RENAME_RECT: RefCell<Option<RectF>> = const { RefCell::new(None) };
+    static SEARCH_RECT: RefCell<Option<RectF>> = const { RefCell::new(None) };
+}
+
+fn sheet_ui(
+    ui: &mut Ui,
+    sheet: &mut Sheet,
+    cmds: &mut Vec<Cmd>,
+    icons: &mut IconCache,
+    pending: &mut bool,
+) {
+    ui.set_clip(None);
+    ui.dy = 0.0;
+    let full = RectF::new(0.0, 0.0, W, H);
+    ui.fill_round(full, 0.0, ui.p.scrim);
+    let (pw, ph) = (560.0, 580.0);
+    let panel = RectF::new((W - pw) / 2.0, (H - ph) / 2.0, pw, ph);
+    for i in 0..8 {
+        let g = 8.0 - i as f32;
+        ui.fill_round(
+            RectF::new(
+                panel.x - g,
+                panel.y - g + 4.0,
+                panel.w + 2.0 * g,
+                panel.h + 2.0 * g,
+            ),
+            8.0 + g,
+            tiny_skia::Color::from_rgba8(0, 0, 0, 8),
+        );
+    }
+    ui.fill_round(panel, 8.0, ui.p.bg);
+    ui.stroke_round(panel, 8.0, ui.p.card_border, 1.0);
+    let x = panel.x + 24.0;
+    let w = panel.w - 48.0;
+    ui.text_at(
+        "Add apps to the dock",
+        x,
+        panel.y + 22.0,
+        Font::Title,
+        20.0,
+        ui.p.text,
+        w,
+        false,
+    );
+    ui.text_at(
+        "Everything in Start > All apps. Select one or more.",
+        x,
+        panel.y + 54.0,
+        Font::Body,
+        12.0,
+        ui.p.text2,
+        w,
+        false,
+    );
+    let sr = ui.input_frame(RectF::new(x, panel.y + 80.0, w, 34.0), true);
+    SEARCH_RECT.with(|c| *c.borrow_mut() = Some(sr));
+    if sheet.query.is_empty() {
+        // Placeholder drawn under the transparent-looking edit.
+    }
+    // List.
+    let list = RectF::new(x, panel.y + 126.0, w, ph - 126.0 - 72.0);
+    ui.card(list);
+    ui.set_clip(Some(RectF::new(
+        list.x + 1.0,
+        list.y + 1.0,
+        list.w - 2.0,
+        list.h - 2.0,
+    )));
+    let rh = 44.0;
+    ui.dy = sheet.scroll;
+    let px = (24.0 * ui.s).round() as u32;
+    let mut loaded = 0;
+    if sheet.shown.is_empty() {
+        let msg = if sheet.apps.is_empty() {
+            "Couldn't read the list of installed apps."
+        } else {
+            "No apps match your search."
+        };
+        ui.text_at(
+            msg,
+            list.x + 16.0,
+            list.y + 16.0 + sheet.scroll,
+            Font::Body,
+            14.0,
+            ui.p.text2,
+            list.w - 32.0,
+            false,
+        );
+    }
+    for (row, &ai) in sheet.shown.iter().enumerate() {
+        let ry = list.y + 4.0 + row as f32 * rh;
+        if ry + rh - sheet.scroll < list.y || ry - sheet.scroll > list.y + list.h {
+            continue;
+        }
+        let app = &sheet.apps[ai];
+        let r = RectF::new(list.x + 4.0, ry, list.w - 8.0, rh - 2.0);
+        let checked = sheet.selected.contains(&app.target);
+        let (hov, clicked) = ui.interact(idx("sheet-row", ai), r, false, true);
+        if checked {
+            ui.fill_round(r, 4.0, ui.p.nav_selected);
+        } else if hov {
+            ui.fill_round(r, 4.0, ui.p.hover);
+        }
+        let cy = ry + rh / 2.0 - 1.0;
+        ui.checkbox_box(r.x + 10.0, cy, checked);
+        if icons.peek(&app.target, px).is_none() && loaded < 8 {
+            loaded += 1;
+            let _ = icons.get(&app.target, px);
+        }
+        match icons.peek(&app.target, px) {
+            Some(Some(pm)) => {
+                let pm = pm.clone();
+                ui.image(&pm, r.x + 42.0, cy - 12.0, 1.0);
+            }
+            Some(None) => ui.icon('\u{E7C3}', r.x + 54.0, cy, 18.0, ui.p.text2),
+            None => *pending = true,
+        }
+        ui.text_mid(
+            &app.name,
+            r.x + 78.0,
+            cy,
+            Font::Body,
+            14.0,
+            ui.p.text,
+            r.w - 90.0,
+        );
+        if clicked {
+            if checked {
+                sheet.selected.remove(&app.target);
             } else {
-                autostart::disable()
-            };
-            if let Err(e) = r {
-                util::error_box(
-                    hwnd(),
-                    &format!("Berth couldn't change the launch at sign-in setting.\n\n{e}"),
-                );
-            } else if want && autostart::state() == autostart::State::DisabledByWindows {
-                util::info_box(
-                    hwnd(),
-                    "Berth is registered to start at sign-in, but Windows has it switched off.\n\n\
-                     Open Settings > Apps > Startup and switch on \u{201c}Berth\u{201d}.",
+                sheet.selected.insert(app.target.clone());
+            }
+            ui.st.want_frame = true;
+        }
+    }
+    let content = sheet.shown.len() as f32 * rh + 8.0;
+    ui.set_clip(None);
+    ui.dy = 0.0;
+    sheet.scroll = ui.scroll_area(list, content, sheet.scroll);
+    // Footer.
+    let fy = panel.y + ph - 56.0;
+    if ui.button(
+        id("sheet-browse"),
+        RectF::new(x, fy, 150.0, 32.0),
+        "Browse for a file\u{2026}",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::Browse(false));
+    }
+    let n = sheet.selected.len();
+    let add_label = if n == 0 {
+        "Add".to_string()
+    } else {
+        format!("Add ({n})")
+    };
+    if ui.button(
+        id("sheet-add"),
+        RectF::new(x + w - 120.0, fy, 120.0, 32.0),
+        &add_label,
+        true,
+        n > 0,
+    ) {
+        cmds.push(Cmd::SheetAdd);
+    }
+    if ui.button(
+        id("sheet-cancel"),
+        RectF::new(x + w - 250.0, fy, 120.0, 32.0),
+        "Cancel",
+        false,
+        true,
+    ) {
+        cmds.push(Cmd::CloseSheet);
+    }
+    if ui.input.key == Some(Key::Escape) && ui.st.dropdown.is_none() {
+        cmds.push(Cmd::CloseSheet);
+    }
+}
+
+fn filter_sheet(sheet: &mut Sheet) {
+    let q = sheet.query.trim().to_lowercase();
+    sheet.shown = (0..sheet.apps.len())
+        .filter(|&i| q.is_empty() || sheet.apps[i].name.to_lowercase().contains(&q))
+        .collect();
+    sheet.scroll = 0.0;
+}
+
+// ----- native edit boxes ---------------------------------------------------------------
+
+fn position_edits() {
+    let Some((search, rename, sheet_open, renaming)) = with_dash(|d| {
+        (
+            d.search_edit,
+            d.rename_edit,
+            d.sheet.is_some(),
+            d.rename.is_some(),
+        )
+    }) else {
+        return;
+    };
+    let place = |h: HWND, r: Option<RectF>, show: bool| unsafe {
+        match (r, show) {
+            (Some(r), true) => {
+                let _ = SetWindowPos(
+                    h,
+                    None,
+                    r.x.round() as i32,
+                    r.y.round() as i32,
+                    r.w.round() as i32,
+                    r.h.round() as i32,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW,
                 );
             }
-            notify_changed();
+            _ => {
+                let _ = ShowWindow(h, SW_HIDE);
+            }
         }
-        (TASKBAR, c::BN_CLICKED) => {
-            let v = get_check(TASKBAR);
-            change(|s| s.hide_taskbar = v);
+    };
+    place(
+        search,
+        SEARCH_RECT.with(|c| c.borrow_mut().take()),
+        sheet_open,
+    );
+    place(
+        rename,
+        RENAME_RECT.with(|c| c.borrow_mut().take()),
+        renaming,
+    );
+}
+
+unsafe extern "system" fn edit_proc(
+    h: HWND,
+    msg: u32,
+    wp: WPARAM,
+    lp: LPARAM,
+    _id: usize,
+    _data: usize,
+) -> LRESULT {
+    match msg {
+        WM_KEYDOWN if wp.0 == VK_RETURN.0 as usize || wp.0 == VK_ESCAPE.0 as usize => {
+            if let Some(p) = GetParent(h).ok() {
+                let commit = wp.0 == VK_RETURN.0 as usize;
+                let _ = PostMessageW(
+                    Some(p),
+                    WM_APP_EDIT_DONE,
+                    WPARAM(commit as usize),
+                    LPARAM(h.0 as isize),
+                );
+            }
+            LRESULT(0)
         }
-        (SHOWDOCK, c::BN_CLICKED) => {
-            let show = get_check(SHOWDOCK);
-            with_app(|a| {
-                a.dock.user_hidden = !show;
-                if show {
-                    a.dock.reveal();
+        WM_CHAR if wp.0 == 13 || wp.0 == 27 => LRESULT(0),
+        WM_KILLFOCUS => {
+            if let Some(p) = GetParent(h).ok() {
+                let _ = PostMessageW(Some(p), WM_APP_EDIT_DONE, WPARAM(2), LPARAM(h.0 as isize));
+            }
+            DefSubclassProc(h, msg, wp, lp)
+        }
+        _ => DefSubclassProc(h, msg, wp, lp),
+    }
+}
+
+/// Finishes a rename (commit = 1 Enter, 0 Escape, 2 focus lost).
+fn edit_done(edit: HWND, how: usize) {
+    let Some((rename_edit, idx_)) = with_dash(|d| (d.rename_edit, d.rename)) else {
+        return;
+    };
+    if edit == rename_edit {
+        if let Some(i) = idx_ {
+            if how != 0 {
+                let name = ui::get_text(edit).trim().to_string();
+                if !name.is_empty() {
+                    run_cmds(vec![Cmd::Set(Box::new(move |s: &mut Settings| {
+                        if let Some(it) = s.items.get_mut(i) {
+                            it.name = name;
+                        }
+                    }))]);
                 }
-                a.dock.render(&a.settings);
-            });
-        }
-        (DISPLAY, c::CBN_SELCHANGE) => {
-            let i = get_combo(DISPLAY);
-            if let Some(dev) = with_dash(|d| d.displays.get(i).cloned()).flatten() {
-                change(|s| s.display = dev);
             }
-        }
-        (POSITION, c::CBN_SELCHANGE) => {
-            let e = [Edge::Bottom, Edge::Left, Edge::Right][get_combo(POSITION).min(2)];
-            change(|s| s.position = e);
-        }
-        (THEME, c::CBN_SELCHANGE) => {
-            let t = [ThemeMode::System, ThemeMode::Light, ThemeMode::Dark][get_combo(THEME).min(2)];
-            change(|s| s.theme = t);
-        }
-        (EFFECT, c::CBN_SELCHANGE) => {
-            let e = [
-                HoverEffect::Magnify,
-                HoverEffect::Lift,
-                HoverEffect::Highlight,
-            ][get_combo(EFFECT).min(2)];
-            change(|s| s.hover_effect = e);
-        }
-        (ANIM, c::CBN_SELCHANGE) => {
-            let m = [AnimationMode::System, AnimationMode::On, AnimationMode::Off]
-                [get_combo(ANIM).min(2)];
-            change(|s| s.animations = m);
-        }
-        (DOTS, c::BN_CLICKED) => {
-            let v = get_check(DOTS);
-            change(|s| s.show_running_indicators = v);
-        }
-        (RUNAPPS, c::BN_CLICKED) => {
-            let v = get_check(RUNAPPS);
-            change(|s| s.show_running_apps = v);
-        }
-        (AUTOHIDE, c::BN_CLICKED) => {
-            let v = get_check(AUTOHIDE);
-            change(|s| s.auto_hide = v);
-        }
-        (UPD_AUTO, c::BN_CLICKED) => {
-            let v = get_check(UPD_AUTO);
-            change(|s| s.check_updates_on_startup = v);
-        }
-        (UPD_CHECK, c::BN_CLICKED) => crate::check_for_updates(),
-        (UPD_RELEASES, c::BN_CLICKED) => {
-            let _ = crate::apps::launch(&format!("{}/releases", crate::REPO_URL));
-        }
-        (FULLSCREEN, c::BN_CLICKED) => {
-            let v = get_check(FULLSCREEN);
-            change(|s| s.hide_in_fullscreen = v);
-        }
-        (RESTORE, c::BN_CLICKED) => crate::restore_defaults(hwnd()),
-        (OPENFOLDER, c::BN_CLICKED) | (LOGS, c::BN_CLICKED) => {
-            crate::perform(Action::OpenDataFolder)
-        }
-        (QUIT, c::BN_CLICKED) => crate::perform(Action::Quit),
-        (WEBSITE, c::BN_CLICKED) => {
-            let _ = crate::apps::launch(crate::REPO_URL);
-        }
-        (ADDAPP, c::BN_CLICKED) => picker::open(),
-        (ADDFILE, c::BN_CLICKED) | (ADDFOLDER, c::BN_CLICKED) => {
-            let paths = picker::browse(hwnd(), id == ADDFOLDER);
-            let items: Vec<PinnedItem> = paths
-                .iter()
-                .map(|p| crate::apps::item_for_path(p))
-                .collect();
-            if !items.is_empty() {
-                crate::add_items(items, None);
-            }
-        }
-        (RENAME, c::BN_CLICKED) => {
-            if let Some(i) = selected_index() {
+            with_dash(|d| d.rename = None);
+            if let Some(h) = hwnd() {
                 unsafe {
-                    let _ = SetFocus(Some(ctl(LIST)));
+                    let _ = SetFocus(Some(h));
                 }
-                send(ctl(LIST), c::LVM_EDITLABELW, i, 0);
             }
+            request_frame();
         }
-        (UP, c::BN_CLICKED) | (DOWN, c::BN_CLICKED) => {
-            if let Some(i) = selected_index() {
-                let j = if id == UP {
-                    i.checked_sub(1)
+    } else if how == 0 {
+        run_cmds(vec![Cmd::CloseSheet]);
+    } else if how == 1 {
+        // Enter in the search box adds the selection, if any.
+        if with_dash(|d| d.sheet.as_ref().map(|s| !s.selected.is_empty())).flatten() == Some(true) {
+            run_cmds(vec![Cmd::SheetAdd]);
+        }
+    }
+}
+
+// ----- commands -----------------------------------------------------------------------
+
+fn run_cmds(cmds: Vec<Cmd>) {
+    for c in cmds {
+        match c {
+            Cmd::Set(f) => {
+                with_app(|a| {
+                    f(&mut a.settings);
+                    a.apply();
+                });
+            }
+            Cmd::Autostart(on) => {
+                let owner = hwnd();
+                let r = if on {
+                    autostart::enable()
                 } else {
-                    Some(i + 1)
+                    autostart::disable()
                 };
-                if let Some(j) = j {
-                    with_dash(|d| d.select_after_refresh = Some(j));
-                    change(|s| {
-                        if j < s.items.len() {
+                if let Err(e) = r {
+                    util::error_box(
+                        owner,
+                        &format!("Berth couldn't change the launch at sign-in setting.\n\n{e}"),
+                    );
+                } else if on && autostart::state() == autostart::State::DisabledByWindows {
+                    util::info_box(
+                        owner,
+                        "Berth is registered to start at sign-in, but Windows has it switched off.\n\n\
+                         Open Settings > Apps > Startup and switch on \u{201c}Berth\u{201d}.",
+                    );
+                }
+            }
+            Cmd::ShowDock(show) => {
+                with_app(|a| {
+                    a.dock.user_hidden = !show;
+                    if show {
+                        a.dock.reveal();
+                    }
+                    a.dock.render(&a.settings);
+                });
+            }
+            Cmd::Restore => crate::restore_defaults(hwnd()),
+            Cmd::OpenFolder => crate::perform(Action::OpenDataFolder),
+            Cmd::Quit => crate::perform(Action::Quit),
+            Cmd::CheckUpdates => crate::check_for_updates(),
+            Cmd::OpenUrl(u) => {
+                let _ = apps::launch(&u);
+            }
+            Cmd::OpenSheet => {
+                let already = with_dash(|d| d.sheet.is_some()).unwrap_or(true);
+                if !already {
+                    unsafe {
+                        let _ = SetCursor(LoadCursorW(None, IDC_WAIT).ok());
+                    }
+                    let list = apps::installed_apps();
+                    with_dash(|d| {
+                        let mut sh = Sheet {
+                            apps: list,
+                            shown: Vec::new(),
+                            selected: HashSet::new(),
+                            scroll: 0.0,
+                            query: String::new(),
+                        };
+                        filter_sheet(&mut sh);
+                        d.sheet = Some(sh);
+                        ui::set_text(d.search_edit, "");
+                        ui::send(
+                            d.search_edit,
+                            ui::c::EM_SETCUEBANNER,
+                            1,
+                            HSTRING::from("Search apps").as_ptr() as isize,
+                        );
+                    });
+                    frame();
+                    if let Some(e) = with_dash(|d| d.search_edit) {
+                        unsafe {
+                            let _ = SetFocus(Some(e));
+                        }
+                    }
+                }
+            }
+            Cmd::CloseSheet => {
+                with_dash(|d| d.sheet = None);
+                if let Some(h) = hwnd() {
+                    unsafe {
+                        let _ = SetFocus(Some(h));
+                    }
+                }
+                request_frame();
+            }
+            Cmd::SheetAdd => {
+                let items: Vec<PinnedItem> = with_dash(|d| {
+                    d.sheet.as_ref().map(|s| {
+                        s.apps
+                            .iter()
+                            .filter(|a| s.selected.contains(&a.target))
+                            .map(|a| PinnedItem {
+                                name: a.name.clone(),
+                                target: a.target.clone(),
+                            })
+                            .collect()
+                    })
+                })
+                .flatten()
+                .unwrap_or_default();
+                crate::add_items(items, None);
+                run_cmds(vec![Cmd::CloseSheet]);
+            }
+            Cmd::Browse(folders) => {
+                let paths = picker::browse(hwnd(), folders);
+                let items: Vec<PinnedItem> = paths.iter().map(|p| apps::item_for_path(p)).collect();
+                if !items.is_empty() {
+                    crate::add_items(items, None);
+                    with_dash(|d| d.sheet = None);
+                    request_frame();
+                }
+            }
+            Cmd::StartRename(i) => {
+                let name =
+                    with_app(|a| a.settings.items.get(i).map(|it| it.name.clone())).flatten();
+                if let Some(name) = name {
+                    with_dash(|d| {
+                        d.rename = Some(i);
+                        ui::set_text(d.rename_edit, &name);
+                    });
+                    frame();
+                    if let Some(e) = with_dash(|d| d.rename_edit) {
+                        unsafe {
+                            let _ = SetFocus(Some(e));
+                        }
+                        ui::send(e, 0x00B1, 0, -1); // EM_SETSEL: select all
+                    }
+                }
+            }
+            Cmd::Move(i, up) => {
+                run_cmds(vec![Cmd::Set(Box::new(move |s: &mut Settings| {
+                    let j = if up { i.checked_sub(1) } else { Some(i + 1) };
+                    if let Some(j) = j {
+                        if j < s.items.len() && i < s.items.len() {
                             s.items.swap(i, j);
                         }
-                    });
-                }
+                    }
+                }))]);
             }
-        }
-        (REMOVE, c::BN_CLICKED) => {
-            if let Some(i) = selected_index() {
-                with_dash(|d| d.select_after_refresh = Some(i));
-                change(|s| {
+            Cmd::Remove(i) => {
+                run_cmds(vec![Cmd::Set(Box::new(move |s: &mut Settings| {
                     if i < s.items.len() {
                         s.items.remove(i);
                     }
-                });
+                }))]);
             }
         }
-        (c::IDCANCEL, _) => close(),
-        _ => {}
     }
 }
 
-fn on_hscroll(source: HWND) {
-    let id = [SIZE, SPACING, MARGIN, OPACITY, MAG]
-        .into_iter()
-        .find(|&i| ctl(i) == source);
-    let Some(id) = id else { return };
-    let v = get_slider(id);
-    change(|s| match id {
-        SIZE => s.icon_size = v,
-        SPACING => s.spacing = v,
-        MARGIN => s.edge_margin = v,
-        OPACITY => s.opacity = v,
-        MAG => s.magnification = v,
-        _ => {}
-    });
-}
+// ----- window procedure -----------------------------------------------------------------
 
-unsafe fn on_notify(hdr: &NMHDR, lp: LPARAM) -> LRESULT {
-    if hdr.idFrom != LIST as usize {
-        return LRESULT(0);
-    }
-    match hdr.code as i32 {
-        c::LVN_ITEMCHANGED => update_app_buttons(),
-        c::NM_DBLCLK => on_command(RENAME, c::BN_CLICKED),
-        c::LVN_BEGINLABELEDITW => return LRESULT(0),
-        c::LVN_ENDLABELEDITW => {
-            let info = &*(lp.0 as *const NMLVDISPINFOW);
-            if !info.item.pszText.is_null() {
-                let name = info
-                    .item
-                    .pszText
-                    .to_string()
-                    .unwrap_or_default()
-                    .trim()
-                    .to_string();
-                let idx = info.item.iItem;
-                if !name.is_empty() && idx >= 0 {
-                    with_dash(|d| d.select_after_refresh = Some(idx as usize));
-                    change(|s| {
-                        if let Some(it) = s.items.get_mut(idx as usize) {
-                            it.name = name;
-                        }
-                    });
-                    return LRESULT(1);
-                }
-            }
-            return LRESULT(0);
-        }
-        _ => {}
-    }
-    LRESULT(0)
-}
-
-unsafe fn draw_nav_item(di: &DRAWITEMSTRUCT) {
-    let Some((font, bold, brush, dpi)) = with_dash(|d| (d.font, d.bold, d.nav_brush, d.dpi)) else {
-        return;
-    };
-    let scale = dpi as f32 / 96.0;
-    let hdc: HDC = di.hDC;
-    let rc = di.rcItem;
-    FillRect(hdc, &rc, GetSysColorBrush(COLOR_WINDOW));
-    if di.itemID == u32::MAX {
-        return;
-    }
-    let selected = di.itemState.0 & 1 != 0; // ODS_SELECTED
-    if selected {
-        let inset = (2.0 * scale) as i32;
-        let old_brush = SelectObject(hdc, HGDIOBJ(brush.0));
-        let old_pen = SelectObject(hdc, GetStockObject(NULL_PEN));
-        let r = (8.0 * scale) as i32;
-        let _ = RoundRect(
-            hdc,
-            rc.left + inset,
-            rc.top + inset,
-            rc.right - inset,
-            rc.bottom - inset,
-            r,
-            r,
-        );
-        // Accent bar.
-        let accent = CreateSolidBrush(COLORREF(0x00C0_6700)); // RGB(0,103,192)
-        let bar_h = (16.0 * scale) as i32;
-        let cy = (rc.top + rc.bottom) / 2;
-        let bar = RECT {
-            left: rc.left + inset,
-            top: cy - bar_h / 2,
-            right: rc.left + inset + (3.0 * scale) as i32,
-            bottom: cy + bar_h / 2,
-        };
-        FillRect(hdc, &bar, accent);
-        let _ = DeleteObject(HGDIOBJ(accent.0));
-        SelectObject(hdc, old_pen);
-        SelectObject(hdc, old_brush);
-    }
-    SetBkMode(hdc, TRANSPARENT);
-    SetTextColor(hdc, COLORREF(GetSysColor(COLOR_WINDOWTEXT)));
-    let old_font = SelectObject(hdc, HGDIOBJ(if selected { bold.0 } else { font.0 }));
-    let mut text: Vec<u16> = PAGES
-        .get(di.itemID as usize)
-        .unwrap_or(&"")
-        .encode_utf16()
-        .collect();
-    let mut tr = RECT {
-        left: rc.left + (16.0 * scale) as i32,
-        ..rc
-    };
-    DrawTextW(
-        hdc,
-        &mut text,
-        &mut tr,
-        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS,
-    );
-    SelectObject(hdc, old_font);
+fn vk_to_key(vk: u16) -> Option<Key> {
+    Some(match vk {
+        v if v == VK_TAB.0 => Key::Tab,
+        v if v == VK_RETURN.0 => Key::Enter,
+        v if v == VK_SPACE.0 => Key::Space,
+        v if v == VK_LEFT.0 => Key::Left,
+        v if v == VK_RIGHT.0 => Key::Right,
+        v if v == VK_UP.0 => Key::Up,
+        v if v == VK_DOWN.0 => Key::Down,
+        v if v == VK_ESCAPE.0 => Key::Escape,
+        v if v == VK_HOME.0 => Key::Home,
+        v if v == VK_END.0 => Key::End,
+        _ => return None,
+    })
 }
 
 unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
+    let mouse = |d: &mut Dash| {
+        d.input.mx = util::get_x_lparam(lp) as f32;
+        d.input.my = util::get_y_lparam(lp) as f32;
+        d.input.inside = true;
+    };
     match msg {
-        WM_COMMAND => {
-            on_command(util::loword(wp.0), util::hiword(wp.0));
+        WM_MOUSEMOVE => {
+            let track = with_dash(|d| {
+                mouse(d);
+                let t = !d.tracking;
+                d.tracking = true;
+                t
+            });
+            if track == Some(true) {
+                let mut tme = TRACKMOUSEEVENT {
+                    cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                    dwFlags: TME_LEAVE,
+                    hwndTrack: hwnd,
+                    dwHoverTime: 0,
+                };
+                let _ = TrackMouseEvent(&mut tme);
+            }
+            frame();
             LRESULT(0)
         }
-        WM_HSCROLL => {
-            on_hscroll(HWND(lp.0 as *mut _));
+        MOUSELEAVE => {
+            with_dash(|d| {
+                d.tracking = false;
+                d.input.inside = false;
+            });
+            frame();
             LRESULT(0)
         }
-        WM_NOTIFY => on_notify(&*(lp.0 as *const NMHDR), lp),
-        WM_MEASUREITEM => {
-            let mi = &mut *(lp.0 as *mut MEASUREITEMSTRUCT);
-            let dpi = BUILD_DPI.with(|b| b.get());
-            mi.itemHeight = (38.0 * dpi as f32 / 96.0) as u32;
-            LRESULT(1)
+        WM_LBUTTONDOWN => {
+            SetCapture(hwnd);
+            let _ = SetFocus(Some(hwnd));
+            with_dash(|d| {
+                mouse(d);
+                d.input.down = true;
+                d.input.pressed = true;
+            });
+            frame();
+            LRESULT(0)
         }
-        WM_DRAWITEM => {
-            let di = &*(lp.0 as *const DRAWITEMSTRUCT);
-            if di.CtlID == NAV as u32 {
-                draw_nav_item(di);
-                return LRESULT(1);
-            }
-            DefWindowProcW(hwnd, msg, wp, lp)
+        WM_LBUTTONUP => {
+            let _ = ReleaseCapture();
+            with_dash(|d| {
+                mouse(d);
+                d.input.down = false;
+                d.input.released = true;
+            });
+            frame();
+            LRESULT(0)
         }
-        WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-            let hdc = HDC(wp.0 as *mut _);
-            let control = HWND(lp.0 as *mut _);
-            let id = GetDlgCtrlID(control) as u16;
-            SetBkColor(hdc, COLORREF(GetSysColor(COLOR_WINDOW)));
-            if NOTES.contains(&id) {
-                SetTextColor(hdc, COLORREF(0x0060_6060));
+        WM_MOUSEWHEEL => {
+            let delta = util::hiword(wp.0) as i16 as f32 / 120.0;
+            with_dash(|d| d.input.wheel += delta);
+            frame();
+            LRESULT(0)
+        }
+        WM_KEYDOWN => {
+            if let Some(k) = vk_to_key(wp.0 as u16) {
+                let shift = (GetKeyState(VK_SHIFT.0 as i32) as u16 & 0x8000) != 0;
+                with_dash(|d| {
+                    d.input.key = Some(k);
+                    d.input.shift = shift;
+                });
+                frame();
+                if k == Key::Escape {
+                    let any_open = with_dash(|d| d.st.dropdown.is_some() || d.sheet.is_some())
+                        .unwrap_or(false);
+                    if !any_open {
+                        close();
+                    }
+                }
             }
-            LRESULT(GetSysColorBrush(COLOR_WINDOW).0 as isize)
+            LRESULT(0)
+        }
+        WM_GETDLGCODE => LRESULT(DLGC_WANTALLKEYS as isize),
+        WM_TIMER if wp.0 == TIMER_ICONS => {
+            let _ = KillTimer(Some(hwnd), TIMER_ICONS);
+            with_dash(|d| d.icons_pending = false);
+            frame();
+            LRESULT(0)
+        }
+        WM_APP_FRAME => {
+            frame();
+            LRESULT(0)
         }
         WM_APP_DASH_REFRESH => {
-            load_values();
+            with_dash(|d| d.displays = monitors_list());
+            frame();
+            LRESULT(0)
+        }
+        WM_APP_EDIT_DONE => {
+            edit_done(HWND(lp.0 as *mut _), wp.0);
+            LRESULT(0)
+        }
+        WM_COMMAND => {
+            // EN_CHANGE from the search box
+            if util::hiword(wp.0) == ui::c::EN_CHANGE && util::loword(wp.0) == 10 {
+                let q = with_dash(|d| ui::get_text(d.search_edit)).unwrap_or_default();
+                with_dash(|d| {
+                    if let Some(s) = d.sheet.as_mut() {
+                        s.query = q;
+                        filter_sheet(s);
+                    }
+                });
+                frame();
+            }
+            LRESULT(0)
+        }
+        WM_CTLCOLOREDIT => {
+            let hdc = HDC(wp.0 as *mut _);
+            let (bg, fg, brush) =
+                with_dash(|d| (d.edit_colors.0, d.edit_colors.1, d.edit_brush)).unwrap_or_default();
+            SetBkColor(hdc, bg);
+            SetTextColor(hdc, fg);
+            LRESULT(brush.0 as isize)
+        }
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = BeginPaint(hwnd, &mut ps);
+            with_dash(|d| {
+                if let Some(pm) = &d.pm {
+                    let (w, h) = (pm.width() as i32, pm.height() as i32);
+                    let bmi = BITMAPINFO {
+                        bmiHeader: BITMAPINFOHEADER {
+                            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                            biWidth: w,
+                            biHeight: -h,
+                            biPlanes: 1,
+                            biBitCount: 32,
+                            biCompression: BI_RGB.0,
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    SetDIBitsToDevice(
+                        hdc,
+                        0,
+                        0,
+                        w as u32,
+                        h as u32,
+                        0,
+                        0,
+                        0,
+                        h as u32,
+                        d.bgra.as_ptr() as *const _,
+                        &bmi,
+                        DIB_RGB_COLORS,
+                    );
+                }
+            });
+            let _ = EndPaint(hwnd, &ps);
             LRESULT(0)
         }
         WM_DPICHANGED => {
             let new_dpi = util::hiword(wp.0) as u32;
             let r = &*(lp.0 as *const RECT);
+            with_dash(|d| {
+                d.dpi = new_dpi;
+                d.text.clear();
+                d.icons.clear();
+            });
             let _ = SetWindowPos(
                 hwnd,
                 None,
@@ -1408,26 +2266,33 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                 r.bottom - r.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            let page = with_dash(|d| {
-                d.dpi = new_dpi;
-                d.page
-            })
-            .unwrap_or(0);
-            destroy_controls();
-            build();
-            load_values();
-            show_page(page);
+            update_edit_font();
+            frame();
             LRESULT(0)
+        }
+        WM_SETTINGCHANGE | WM_THEMECHANGED => {
+            with_dash(|d| {
+                d.accent = read_accent();
+                d.last_dark = None;
+            });
+            frame();
+            DefWindowProcW(hwnd, msg, wp, lp)
+        }
+        WM_ACTIVATE => {
+            request_frame();
+            DefWindowProcW(hwnd, msg, wp, lp)
         }
         WM_CLOSE => {
             let _ = DestroyWindow(hwnd);
             LRESULT(0)
         }
         WM_DESTROY => {
-            destroy_controls();
-            let brush = with_dash(|d| d.nav_brush);
-            if let Some(b) = brush {
-                let _ = DeleteObject(HGDIOBJ(b.0));
+            let res = with_dash(|d| (d.edit_font, d.edit_brush));
+            if let Some((f, b)) = res {
+                ui::delete_font(f);
+                if !b.is_invalid() {
+                    let _ = DeleteObject(HGDIOBJ(b.0));
+                }
             }
             DASH.with(|d| {
                 if let Ok(mut b) = d.try_borrow_mut() {

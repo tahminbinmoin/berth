@@ -572,29 +572,6 @@ pub fn default_items() -> Vec<PinnedItem> {
     items
 }
 
-/// The shell's small system image list (shared; never destroy it).
-pub fn system_image_list() -> isize {
-    use windows::Win32::Storage::FileSystem::FILE_FLAGS_AND_ATTRIBUTES;
-    use windows::Win32::UI::Shell::{
-        SHGetFileInfoW, SHFILEINFOW, SHGFI_SMALLICON, SHGFI_SYSICONINDEX,
-    };
-    let mut sfi = SHFILEINFOW::default();
-    unsafe {
-        SHGetFileInfoW(
-            &HSTRING::from("C:\\"),
-            FILE_FLAGS_AND_ATTRIBUTES(0),
-            Some(&mut sfi),
-            std::mem::size_of::<SHFILEINFOW>() as u32,
-            SHGFI_SYSICONINDEX | SHGFI_SMALLICON,
-        ) as isize
-    }
-}
-
-/// Index of a target's icon in the system image list (or -1).
-pub fn system_icon_index(target: &str) -> i32 {
-    icon_index(target, true)
-}
-
 /// Same, for the large/extra-large/jumbo image lists.
 pub fn system_icon_index_large(target: &str) -> i32 {
     icon_index(target, false)

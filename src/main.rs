@@ -26,6 +26,7 @@ mod tray;
 mod ui;
 mod updater;
 mod util;
+mod widgets;
 
 use std::cell::RefCell;
 
@@ -74,7 +75,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "Fixed: the dock shows up again over maximized apps. Only real full-screen apps hide it.";
+    "New look: the Berth Dashboard has been redesigned in the Windows 11 style, with a built-in Add apps panel.";
 
 pub struct App {
     pub settings: Settings,
@@ -1007,6 +1008,7 @@ struct Args {
     #[allow(dead_code)]
     startup: bool,
     after_update: Option<u32>,
+    dashboard_dir: Option<String>,
     reset: bool,
     self_test: Option<String>,
     preview: Option<String>,
@@ -1017,6 +1019,7 @@ fn parse_args() -> Args {
     let mut a = Args {
         startup: false,
         after_update: None,
+        dashboard_dir: None,
         reset: false,
         self_test: None,
         preview: None,
@@ -1028,6 +1031,7 @@ fn parse_args() -> Args {
             "--startup" => a.startup = true,
             "--reset-settings" => a.reset = true,
             "--after-update" => a.after_update = it.next().and_then(|p| p.parse().ok()),
+            "--render-dashboard" => a.dashboard_dir = it.next(),
             "--self-test" => {
                 a.self_test = Some(it.next().unwrap_or_else(|| "berth-self-test.txt".into()))
             }
@@ -1096,7 +1100,8 @@ fn install_panic_hook() {
 fn main() {
     install_panic_hook();
     let args = parse_args();
-    let testing = args.self_test.is_some() || args.preview.is_some();
+    let testing =
+        args.self_test.is_some() || args.preview.is_some() || args.dashboard_dir.is_some();
 
     unsafe {
         let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
@@ -1299,6 +1304,16 @@ fn main() {
         let code = render_preview(path);
         std::process::exit(code);
     }
+    if let Some(dir) = &args.dashboard_dir {
+        let code = match dashboard::render_to_files(dir) {
+            Ok(_) => 0,
+            Err(e) => {
+                log(&format!("dashboard render failed: {e}"));
+                1
+            }
+        };
+        std::process::exit(code);
+    }
     if let Some(report) = &args.self_test {
         let code = self_test(report);
         std::process::exit(code);
@@ -1474,6 +1489,10 @@ fn self_test(report: &str) -> i32 {
         system::system_animations_enabled()
     ));
     lines.push(format!("autostart: {:?}", autostart::state()));
+    let (dash_lines, dash_ok) = dashboard::self_test();
+    lines.push("dashboard interaction test:".into());
+    lines.extend(dash_lines);
+    ok &= dash_ok;
     // CI only (it briefly changes the taskbar): exercise the taskbar option
     // the same way the dashboard does, then put everything back.
     if std::env::var("BERTH_TEST_TASKBAR").as_deref() == Ok("1") {

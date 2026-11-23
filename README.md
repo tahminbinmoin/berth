@@ -16,9 +16,9 @@ taskbar away until you need it), and you control all of it from a dashboard.
 ![Berth dock, light theme](docs/dock-light.png)
 ![Berth dock, dark theme](docs/dock-dark.png)
 
-> **About these screenshots:** they were captured during development under Wine on Linux, so
-> the icons are Wine's stand-ins for system tools. On Windows 11 the dock shows your apps'
-> real icons. A screenshot from a Windows 11 PC will replace these once one is available.
+> **About these screenshots:** they're rendered by Berth itself on Windows (Server 2025, the
+> Windows 11 24H2 code base) in the automated build. The dock images are placed on a
+> sample background and enlarged 2×; the dashboard images are shown as drawn.
 
 ## Features
 
@@ -46,15 +46,20 @@ taskbar away until you need it), and you control all of it from a dashboard.
   dashboard. Berth can start automatically when you sign in to Windows; you choose this on
   first launch and can change it at any time.
 - **Berth Dashboard:** one window for every setting (General, Appearance, Behavior, Apps,
-  Updates, About). Changes apply instantly and are saved automatically.
+  Updates, About), designed like Windows 11 Settings, in light or dark with your accent
+  colour. Changes apply instantly and are saved automatically.
 - **One-click updates:** Dashboard > Updates > **Check for updates and install** downloads
   the latest release from this repository, verifies its checksum, and restarts Berth on
   the new version. Your settings are kept. Berth also shows a notification when a new
   version is out (you can turn this off).
 
 <p>
-  <img src="docs/dashboard-appearance.png" width="49%" alt="Berth Dashboard, Appearance page">
-  <img src="docs/dashboard-apps.png" width="49%" alt="Berth Dashboard, Apps page">
+  <img src="docs/dashboard-general-dark.png" width="49%" alt="Berth Dashboard, General page, dark theme">
+  <img src="docs/dashboard-appearance-light.png" width="49%" alt="Berth Dashboard, Appearance page, light theme">
+</p>
+<p>
+  <img src="docs/dashboard-apps-light.png" width="49%" alt="Berth Dashboard, Apps page">
+  <img src="docs/dashboard-add-apps-dark.png" width="49%" alt="Add apps panel">
 </p>
 
 Berth has no accounts, ads, telemetry, subscriptions or cloud features, and it never needs
@@ -70,18 +75,18 @@ administrator rights.
 
 ## Install
 
-Berth 0.1.7 is distributed as a portable zip file. There is no installer yet, and the
+Berth 0.2.0 is distributed as a portable zip file. There is no installer yet, and the
 program is **not code-signed** (signing certificates cost money; see
 [Limitations](#current-limitations-and-known-issues)).
 
 1. Open the [Releases page](https://github.com/tahminbinmoin/berth/releases/latest) and,
-   under **Assets**, download **`Berth-0.1.7-windows-x64.zip`**. Optionally also download
-   **`Berth-0.1.7-windows-x64.zip.sha256`**.
+   under **Assets**, download **`Berth-0.2.0-windows-x64.zip`**. Optionally also download
+   **`Berth-0.2.0-windows-x64.zip.sha256`**.
 2. *(Recommended)* Check that the download is intact. Open **Terminal** in your Downloads
    folder and run:
 
    ```powershell
-   Get-FileHash .\Berth-0.1.7-windows-x64.zip -Algorithm SHA256
+   Get-FileHash .\Berth-0.2.0-windows-x64.zip -Algorithm SHA256
    ```
 
    The hash shown must match the text in the `.sha256` file. If it doesn't, delete the zip
@@ -127,10 +132,12 @@ are needed.
   remove it from the dock, or keep a running app in the dock.
 - **Right-click the dock background** (or left-click the tray icon) to open the
   dashboard, add an app, hide the dock, or quit.
-- **Add apps:** Dashboard > Apps > **Add app…** (lists everything in Start > All apps),
-  **Add file…**, **Add folder…**, or drag files, folders and shortcuts onto the dock.
-- **Reorder:** drag icons along the dock, or use **Move up / Move down** in the
-  dashboard. **Rename** changes the label shown on hover.
+- **Add apps:** Dashboard > Apps > **Add apps** (search and tick anything in Start > All
+  apps), **Add file**, **Add folder**, or drag files, folders and shortcuts onto the dock.
+- **Reorder, rename, remove:** drag icons along the dock, or use the arrow, pencil and bin
+  buttons next to each app on the dashboard's Apps page.
+- **Keyboard:** in the dashboard, Tab moves between controls, Space/Enter activate, arrow
+  keys change sliders and dropdowns, and Esc closes.
 - **Open the dashboard:** left-click the tray icon, choose **Open Dashboard…** from any
   Berth menu, or simply run `Berth.exe` again while Berth is already running.
 
@@ -266,7 +273,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.1.7 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.2.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -298,8 +305,9 @@ This is the first release. Please read these before relying on it.
   without the system-wide notification that made Explorer take the space back.
   After a display change, Explorer may briefly take the strip back before Berth reclaims it.
 - **One dock, one display** at a time. Top-edge placement isn't offered.
-- The dashboard uses standard Windows controls in a light style, even when Windows is in
-  dark mode. The dock itself follows the dark theme.
+- The dashboard is drawn by Berth itself (only the search and rename boxes are standard
+  Windows controls), so screen readers can't yet describe its controls. Keyboard
+  navigation works.
 - Dragging items directly from the Start menu onto the dock isn't supported. Use
   **Add app…** instead.
 - Windows won't let Berth receive files dragged from apps running as administrator.
