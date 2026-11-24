@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.6.0 — 2026-11-24
+
+- **New: Mac-style window animations** (optional, Dashboard > Behavior):
+  - minimizing a window shrinks it into its app's dock icon along a curve;
+  - clicking the icon of a minimized app grows the window back out of the icon;
+  - opening an app from the dock zooms out of its icon to the new window.
+  While on, Windows' own minimize/maximize animation is switched off for the current
+  sign-in only, and switched back on when the option is turned off or Berth quits.
+- New installs get it in the Recommended setup panel.
+- CI checks that Windows draws live window thumbnails on Berth's overlay.
+
 ## 0.5.0 — 2026-11-24
 
 - **New: Mac-style menu bar** (optional) along the top of the dock's display:

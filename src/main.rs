@@ -29,6 +29,7 @@ mod ui;
 mod updater;
 mod util;
 mod widgets;
+mod winanim;
 mod winsetup;
 
 use std::cell::RefCell;
@@ -78,8 +79,7 @@ const TIMER_TASKBAR: usize = 13;
 const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
-const WHATS_NEW: &str =
-    "New: a Mac-style menu bar. Turn it on in Dashboard > Appearance > Menu bar.";
+const WHATS_NEW: &str = "New: Mac-style window animations. Turn them on in Dashboard > Behavior.";
 
 pub struct App {
     pub settings: Settings,
@@ -121,6 +121,9 @@ impl App {
     }
 
     pub fn sync_menubar(&self) {
+        if self.persist {
+            winanim::set_enabled(self.settings.window_animations);
+        }
         if self.persist {
             menubar::sync(
                 self.settings.menu_bar,
@@ -554,11 +557,24 @@ fn open_entry(idx: usize, new_instance: bool) {
     };
     with_app(|a| a.dock.clear_attention(idx));
     crate::preview::hide();
+    let icon = with_app(|a| a.dock.entry_screen_rect(idx).zip(a.dock.edge())).flatten();
     if !new_instance && !windows.is_empty() {
-        apps::activate(&windows);
+        // A minimized app grows back out of its icon (when animations are on).
+        let animated = icon
+            .map(|(r, e)| winanim::restore_from_dock(&windows, r, e))
+            .unwrap_or(false);
+        if !animated {
+            apps::activate(&windows);
+        }
         return;
     }
     with_app(|a| a.dock.start_bounce(idx));
+    if let Some((r, e)) = icon {
+        let pm = with_app(|a| (a.dock.icons.get(&target, 256).cloned(), a.dock.dark));
+        if let Some((pm, dark)) = pm {
+            winanim::note_launch(&target, r, e, pm, dark);
+        }
+    }
     match apps::launch(&target) {
         Ok(()) => {}
         Err(apps::LaunchError::Cancelled) => {}
@@ -887,6 +903,7 @@ pub fn undo_setup() {
 
 fn quit() {
     menubar::shutdown();
+    winanim::set_enabled(false);
     with_app(|a| {
         a.restore_taskbar();
         let _ = a.save_now();
@@ -1444,6 +1461,7 @@ fn main() {
             || !picker::register(hinst)
             || !preview::register(hinst)
             || !menubar::register(hinst)
+            || !winanim::register(hinst)
         {
             error_box(
                 None,
@@ -1739,6 +1757,13 @@ fn self_test(report: &str) -> i32 {
             lines.push(format!("menu bar render: FAILED ({e})"));
             ok = false;
         }
+    }
+    for (name, pass) in winanim::self_test() {
+        lines.push(format!(
+            "window animations: {name}: {}",
+            if pass { "ok" } else { "FAILED" }
+        ));
+        ok &= pass;
     }
     let (pv_line, pv_ok) = preview::self_test();
     lines.push(pv_line);

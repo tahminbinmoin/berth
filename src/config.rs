@@ -87,6 +87,8 @@ pub struct Settings {
     pub trash_at_end: bool,
     /// Show the Mac-style menu bar along the top of the dock's display.
     pub menu_bar: bool,
+    /// Mac-style minimize/restore/launch animations into and out of the dock.
+    pub window_animations: bool,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
     /// Look for a new release on GitHub at start-up and twice a day, and
@@ -127,6 +129,7 @@ impl Default for Settings {
             window_previews: true,
             trash_at_end: true,
             menu_bar: false,
+            window_animations: false,
             auto_hide: false,
             hide_in_fullscreen: true,
             check_updates_on_startup: true,
