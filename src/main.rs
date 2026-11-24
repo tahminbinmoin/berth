@@ -1659,9 +1659,7 @@ fn main() {
     let migrated = config::MIGRATED_TO_V2.load(std::sync::atomic::Ordering::Relaxed);
     if args.after_update.is_some() || (migrated && !first_run) {
         log(&format!("now running Berth {VERSION} after an update"));
-        if let Some(c) = controller() {
-            unsafe { SetTimer(Some(c), TIMER_OFFER, 2500, None) };
-        }
+        unsafe { SetTimer(Some(controller), TIMER_OFFER, 2500, None) };
         let body = if migrated {
             format!("{WHATS_NEW} Update notifications are now on; turn them off in Dashboard > Updates.")
         } else {
