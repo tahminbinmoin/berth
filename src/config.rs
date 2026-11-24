@@ -85,6 +85,8 @@ pub struct Settings {
     pub window_previews: bool,
     /// Keep the Recycle Bin at the end of the dock, after a divider.
     pub trash_at_end: bool,
+    /// Show the Mac-style menu bar along the top of the dock's display.
+    pub menu_bar: bool,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
     /// Look for a new release on GitHub at start-up and twice a day, and
@@ -124,6 +126,7 @@ impl Default for Settings {
             show_running_apps: false,
             window_previews: true,
             trash_at_end: true,
+            menu_bar: false,
             auto_hide: false,
             hide_in_fullscreen: true,
             check_updates_on_startup: true,

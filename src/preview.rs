@@ -727,7 +727,7 @@ fn window_title(h: HWND) -> String {
 }
 
 /// Pushes a premultiplied RGBA pixmap to a layered window at (x, y).
-fn push_layered(hwnd: HWND, pm: &Pixmap, x: i32, y: i32) {
+pub fn push_layered(hwnd: HWND, pm: &Pixmap, x: i32, y: i32) {
     let (w, h) = (pm.width() as i32, pm.height() as i32);
     unsafe {
         let dc = CreateCompatibleDC(None);

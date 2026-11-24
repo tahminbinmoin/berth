@@ -195,9 +195,24 @@ fn set_work_area(r: RECT) -> Result<(), String> {
     }
 }
 
+/// The whole monitor minus the strip Berth's menu bar reserves there.
+fn full_area(monitor: RECT) -> RECT {
+    let mut w = monitor;
+    if let Some(r) = crate::menubar::reserved() {
+        if r.left >= monitor.left
+            && r.right <= monitor.right
+            && r.top >= monitor.top
+            && r.top < monitor.bottom
+        {
+            w.top = w.top.max(r.bottom);
+        }
+    }
+    w
+}
+
 /// The work area Windows would use with this bar visible.
 fn work_with_bar(b: &Bar) -> RECT {
-    let mut w = b.monitor;
+    let mut w = full_area(b.monitor);
     match b.edge {
         BarEdge::Left => w.left = b.rect.right.max(w.left),
         BarEdge::Right => w.right = b.rect.left.min(w.right),
@@ -457,15 +472,16 @@ impl Hider {
             }
             // Keep the strip for apps (without a broadcast). Explorer may
             // reclaim it after display or settings changes.
-            if b.work != b.monitor {
+            let full = full_area(b.monitor);
+            if b.work != full {
                 let due = self
                     .last_work_fix
                     .map(|t| t.elapsed() >= Duration::from_secs(1))
                     .unwrap_or(true);
                 if due {
                     self.last_work_fix = Some(now);
-                    if set_work_area_quiet(b.monitor) {
-                        resize_maximized(b.work, b.monitor);
+                    if set_work_area_quiet(full) {
+                        resize_maximized(b.work, full);
                     }
                 }
             }
@@ -504,6 +520,7 @@ fn restore_bars() {
 /// Last-resort restore (after an unexpected exit, or from the panic
 /// handler): show every taskbar and give it its strip back.
 pub fn emergency_restore() {
+    crate::menubar::shutdown();
     restore_bars();
 }
 

@@ -29,6 +29,13 @@ taskbar away until you need it), and you control all of it from a dashboard.
   drag files onto the dock. Drag icons to reorder them.
 - **Window previews:** rest the pointer on an open app to see a live thumbnail of each of
   its windows. Click one to switch to it, or use its close button (or middle-click) to close it.
+- **Menu bar (optional):** a Mac-style bar along the top of the screen. On the left: a
+  Berth menu (Windows Settings, Task Manager, Sleep, Restart, Shut Down, Lock, Sign Out),
+  the name of the app you're using with Hide, Hide Others, Show All and Quit, and a Window
+  menu (Minimize, Zoom, Close). On the right: search, your input language (when you have
+  more than one), Wi-Fi, volume and battery (click for Quick Settings), and the date and
+  time (click for notifications). Windows keeps maximized windows below it. Turn it on in
+  **Dashboard > Appearance > Menu bar** or in the Recommended setup.
 - **Mac-style touches:** drag an icon off the dock to remove it, the Recycle Bin sits at
   the end after a divider (drop files on it to delete them), and an app's icon bounces
   when one of its windows needs your attention.
@@ -131,6 +138,7 @@ program is **not code-signed** (signing certificates cost money; see
      says so and leaves it there.
    - **Hide the Windows taskbar until needed:** it slides in when you point at its edge.
    - **Remove This PC and Recycle Bin from the desktop:** both are pinned to the dock.
+   - **Show a Mac-style menu bar at the top.**
    - **Tell me about new versions.**
 
    You can open the panel again, or change each option on its own, in **Dashboard >
@@ -324,7 +332,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.4.0 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.5.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -359,6 +367,10 @@ This is the first release. Please read these before relying on it.
   restarts Explorer to apply it. Left, top and right are only available on Windows 11
   builds that support them (Berth checks and reverts if not). Microsoft doesn't document
   this value, so a future Windows update could change it; Berth always checks the result.
+- **The menu bar's app menus** act on whole windows (hide, quit, minimize, zoom, close).
+  They can't show an app's own File, Edit or View menus. The Wi-Fi and volume symbols don't
+  show live status; click them to open Windows' Quick Settings. The menu bar appears on the
+  dock's display only.
 - **Window previews** are drawn by Windows itself. Minimized windows show the app's icon
   instead of a picture, because Windows has nothing to show for them.
 - **Import from taskbar** finds desktop apps pinned to the taskbar. Apps from the Microsoft

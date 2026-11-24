@@ -713,3 +713,59 @@ pub fn recycle(owner: Option<HWND>, paths: &[String]) -> bool {
     };
     unsafe { SHFileOperationW(&mut op) == 0 && !op.fAnyOperationsAborted.as_bool() }
 }
+
+/// The app a window belongs to: a launch target (program path, or
+/// `shell:AppsFolder\<id>` for Store apps) and its process id.
+pub struct WindowApp {
+    pub target: String,
+    pub pid: u32,
+}
+
+pub fn window_app(hwnd: HWND) -> Option<WindowApp> {
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            return None;
+        }
+        let mut exe = process_image(pid);
+        let mut aumid = window_aumid(hwnd);
+        let mut app_pid = pid;
+        if exe.as_deref().map(|e| {
+            e.to_ascii_lowercase()
+                .ends_with(r"\applicationframehost.exe")
+        }) == Some(true)
+        {
+            if let Some(p) = hosted_core_window_pid(hwnd, pid) {
+                app_pid = p;
+                exe = process_image(p);
+                if aumid.is_none() {
+                    aumid = process_aumid(p);
+                }
+            } else {
+                exe = None;
+            }
+        } else if aumid.is_none() {
+            aumid = process_aumid(pid);
+        }
+        let packaged = exe
+            .as_deref()
+            .map(|e| e.to_ascii_lowercase().contains(r"\windowsapps\"))
+            .unwrap_or(true);
+        let target = match (aumid, exe) {
+            (Some(a), _) if packaged => format!("{APPS_FOLDER_PREFIX}{a}"),
+            (_, Some(e)) => e,
+            (Some(a), None) => format!("{APPS_FOLDER_PREFIX}{a}"),
+            (None, None) => return None,
+        };
+        Some(WindowApp {
+            target,
+            pid: app_pid,
+        })
+    }
+}
+
+/// The window's class name (e.g. to recognise the desktop).
+pub fn window_class(hwnd: HWND) -> String {
+    class_of(hwnd)
+}
