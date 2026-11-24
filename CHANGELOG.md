@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 — 2026-11-24
+
+- After an update, Berth now asks once whether to turn on new optional features (the menu
+  bar and Mac-style window animations) instead of leaving them switched off in the
+  dashboard. Say no and it won't ask again; change them any time in the dashboard.
+
 ## 0.6.0 — 2026-11-24
 
 - **New: Mac-style window animations** (optional, Dashboard > Behavior):
