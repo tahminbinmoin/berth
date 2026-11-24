@@ -72,6 +72,21 @@ jobs:
           if ($p.ExitCode -ne 0) { throw "dashboard render failed" }
           Get-ChildItem dash | ForEach-Object { "{0} {1}" -f $_.Name, $_.Length }
 
+      - name: Render media (media-render branch only)
+        if: github.head_ref == 'media-render'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force media | Out-Null
+          $p = Start-Process -FilePath target\release\Berth.exe -ArgumentList '--render-media', "$PWD\media" -Wait -PassThru
+          "exit: $($p.ExitCode)"
+          Get-Content media\icons.txt -ErrorAction SilentlyContinue
+          Get-ChildItem media\*.png | ForEach-Object {
+            "BEGIN-PNG media-$($_.Name)"
+            $b = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b.Length; $i += 3000) { "B64:" + $b.Substring($i, [Math]::Min(3000, $b.Length - $i)) }
+            "END-PNG media-$($_.Name)"
+          }
+
       - name: Print dashboard renders (pull requests only, for review)
         if: github.event_name == 'pull_request'
         shell: pwsh

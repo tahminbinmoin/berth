@@ -222,8 +222,44 @@ pub fn open_page(page: usize) {
 
 /// Developer aid (`--render-dashboard <dir>`): draws every page in light
 /// and dark, plus the Add apps panel, to PNG files.
+static RENDER_BIG: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Renders the pages at another DPI (e.g. 144 = 1.5x) for high-resolution media.
+pub fn render_to_files_dpi(dir: &str, dpi: u32) -> Result<usize, String> {
+    open_page_inner(0, false);
+    RENDER_BIG.store(true, std::sync::atomic::Ordering::Relaxed);
+    let h = hwnd().ok_or("no dashboard window")?;
+    let cur = with_dash(|d| d.dpi).unwrap_or(96);
+    unsafe {
+        let mut wr = RECT::default();
+        let mut cr = RECT::default();
+        let _ = GetWindowRect(h, &mut wr);
+        let _ = GetClientRect(h, &mut cr);
+        let k = dpi as f32 / cur as f32;
+        let fx = (wr.right - wr.left) - cr.right;
+        let fy = (wr.bottom - wr.top) - cr.bottom;
+        let r = RECT {
+            left: wr.left,
+            top: wr.top,
+            right: wr.left + (cr.right as f32 * k).round() as i32 + fx,
+            bottom: wr.top + (cr.bottom as f32 * k).round() as i32 + fy,
+        };
+        SendMessageW(
+            h,
+            WM_DPICHANGED,
+            Some(WPARAM((dpi | (dpi << 16)) as usize)),
+            Some(LPARAM(&r as *const RECT as isize)),
+        );
+    }
+    render_pages(dir)
+}
+
 pub fn render_to_files(dir: &str) -> Result<usize, String> {
     open_page_inner(0, false);
+    render_pages(dir)
+}
+
+fn render_pages(dir: &str) -> Result<usize, String> {
     std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let mut n = 0;
     for dark in [false, true] {
@@ -2695,6 +2731,12 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
                 }
             });
             let _ = EndPaint(hwnd, &ps);
+            LRESULT(0)
+        }
+        WM_GETMINMAXINFO if RENDER_BIG.load(std::sync::atomic::Ordering::Relaxed) => {
+            let mmi = &mut *(lp.0 as *mut MINMAXINFO);
+            mmi.ptMaxTrackSize.x = 8000;
+            mmi.ptMaxTrackSize.y = 8000;
             LRESULT(0)
         }
         WM_DPICHANGED => {

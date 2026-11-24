@@ -1218,6 +1218,7 @@ struct Args {
     startup: bool,
     after_update: Option<u32>,
     dashboard_dir: Option<String>,
+    media_dir: Option<String>,
     reset: bool,
     self_test: Option<String>,
     preview: Option<String>,
@@ -1229,6 +1230,7 @@ fn parse_args() -> Args {
         startup: false,
         after_update: None,
         dashboard_dir: None,
+        media_dir: None,
         reset: false,
         self_test: None,
         preview: None,
@@ -1241,6 +1243,7 @@ fn parse_args() -> Args {
             "--reset-settings" => a.reset = true,
             "--after-update" => a.after_update = it.next().and_then(|p| p.parse().ok()),
             "--render-dashboard" => a.dashboard_dir = it.next(),
+            "--render-media" => a.media_dir = it.next(),
             "--self-test" => {
                 a.self_test = Some(it.next().unwrap_or_else(|| "berth-self-test.txt".into()))
             }
@@ -1520,6 +1523,9 @@ fn main() {
         let code = render_preview(path);
         std::process::exit(code);
     }
+    if let Some(dir) = &args.media_dir {
+        std::process::exit(render_media(dir));
+    }
     if let Some(dir) = &args.dashboard_dir {
         for dark in [false, true] {
             let name = format!("{dir}\\menubar-{}.png", if dark { "dark" } else { "light" });
@@ -1622,6 +1628,68 @@ fn main() {
 
 /// `--render-preview out.png [--dark]`: draws the dock with one icon
 /// hovered and saves the image. Used for screenshots and visual checks.
+/// `--render-media dir`: high-resolution renders for videos and docs:
+/// app icons at 256 px, the menu bar at 1.5x and dashboard pages at 1.5x.
+fn render_media(dir: &str) -> i32 {
+    let _ = std::fs::create_dir_all(dir);
+    let mut names = Vec::new();
+    let mut targets: Vec<(String, String)> = apps::default_items()
+        .into_iter()
+        .map(|i| (i.name, i.target))
+        .collect();
+    for (n, p) in [
+        (
+            "Google Chrome",
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        ),
+        ("Firefox", r"C:\Program Files\Mozilla Firefox\firefox.exe"),
+        (
+            "Visual Studio Code",
+            r"C:\Program Files\Microsoft VS Code\Code.exe",
+        ),
+        ("PowerShell", r"C:\Program Files\PowerShell\7\pwsh.exe"),
+        ("Notepad", r"C:\Windows\System32\notepad.exe"),
+        ("Task Manager", r"C:\Windows\System32\Taskmgr.exe"),
+        ("Paint", r"C:\Windows\System32\mspaint.exe"),
+        ("Calculator", r"C:\Windows\System32\calc.exe"),
+        ("Command Prompt", r"C:\Windows\System32\cmd.exe"),
+        (
+            "Windows Media Player",
+            r"C:\Program Files\Windows Media Player\wmplayer.exe",
+        ),
+    ] {
+        if std::path::Path::new(p).exists() {
+            targets.push((n.to_string(), p.to_string()));
+        }
+    }
+    for (i, (name, target)) in targets.iter().enumerate() {
+        let path = format!("{dir}\\icon-{i:02}.png");
+        let ok = with_app(|a| {
+            a.dock
+                .icons
+                .get(target, 256)
+                .map(|p| p.save_png(&path).is_ok())
+        })
+        .flatten()
+        .unwrap_or(false);
+        if ok {
+            names.push(format!("icon-{i:02}.png\t{name}"));
+        }
+    }
+    let _ = std::fs::write(format!("{dir}\\icons.txt"), names.join("\n"));
+    for dark in [false, true] {
+        let t = if dark { "dark" } else { "light" };
+        let _ = menubar::render_png(&format!("{dir}\\menubar-{t}.png"), dark, 1.5);
+    }
+    match dashboard::render_to_files_dpi(dir, 144) {
+        Ok(_) => 0,
+        Err(e) => {
+            log(&format!("media render failed: {e}"));
+            1
+        }
+    }
+}
+
 fn render_preview(path: &str) -> i32 {
     let r = with_app(|a| {
         a.dock.animate = false;
