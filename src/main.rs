@@ -18,6 +18,7 @@ mod dashboard;
 mod dock;
 mod draw;
 mod icons;
+mod menubar;
 mod picker;
 mod preview;
 mod system;
@@ -78,7 +79,7 @@ const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
 const WHATS_NEW: &str =
-    "New: window previews, drag icons off the dock to remove them, a Mac-style Recycle Bin, and a glassier look.";
+    "New: a Mac-style menu bar. Turn it on in Dashboard > Appearance > Menu bar.";
 
 pub struct App {
     pub settings: Settings,
@@ -113,9 +114,20 @@ impl App {
         self.dock.sync_items(&self.settings);
         self.dock.relayout(&self.settings);
         self.dock.render(&self.settings);
+        self.sync_menubar();
         self.sync_taskbar();
         self.schedule_save();
         dashboard::notify_changed();
+    }
+
+    pub fn sync_menubar(&self) {
+        if self.persist {
+            menubar::sync(
+                self.settings.menu_bar,
+                self.dock.geo.as_ref().map(|g| g.monitor.clone()),
+                self.dock.dark,
+            );
+        }
     }
 
     /// Applies the "hide the Windows taskbar" option. At the bottom edge
@@ -256,15 +268,15 @@ const ID_ABOUT: u32 = 16;
 const ID_QUIT: u32 = 17;
 const ID_UPDATE: u32 = 18;
 
-unsafe fn append(menu: HMENU, id: u32, text: &str, flags: MENU_ITEM_FLAGS) {
+pub unsafe fn append(menu: HMENU, id: u32, text: &str, flags: MENU_ITEM_FLAGS) {
     let _ = AppendMenuW(menu, MF_STRING | flags, id as usize, &HSTRING::from(text));
 }
-unsafe fn separator(menu: HMENU) {
+pub unsafe fn separator(menu: HMENU) {
     let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
 }
 
 /// Shows a popup menu and returns the chosen command (0 = dismissed).
-fn track_menu(menu: HMENU, x: i32, y: i32) -> u32 {
+pub fn track_menu(menu: HMENU, x: i32, y: i32) -> u32 {
     let Some(owner) = with_app(|a| {
         a.dock.menu_open = true;
         a.controller
@@ -874,6 +886,7 @@ pub fn undo_setup() {
 }
 
 fn quit() {
+    menubar::shutdown();
     with_app(|a| {
         a.restore_taskbar();
         let _ = a.save_now();
@@ -995,6 +1008,7 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                         a.dock.icons.clear();
                         a.dock.relayout(&a.settings);
                         a.dock.render(&a.settings);
+                        a.sync_menubar();
                     })
                     .is_none()
                     {
@@ -1429,6 +1443,7 @@ fn main() {
             || !dashboard::register(hinst)
             || !picker::register(hinst)
             || !preview::register(hinst)
+            || !menubar::register(hinst)
         {
             error_box(
                 None,
@@ -1506,6 +1521,12 @@ fn main() {
         std::process::exit(code);
     }
     if let Some(dir) = &args.dashboard_dir {
+        for dark in [false, true] {
+            let name = format!("{dir}\\menubar-{}.png", if dark { "dark" } else { "light" });
+            if let Err(e) = menubar::render_png(&name, dark, 1.0) {
+                log(&format!("menu bar render failed: {e}"));
+            }
+        }
         let code = match dashboard::render_to_files(dir) {
             Ok(_) => 0,
             Err(e) => {
@@ -1706,6 +1727,19 @@ fn self_test(report: &str) -> i32 {
         ok &= *pass;
     }
     ok &= !dock_checks.is_empty();
+    match menubar::render_png(&format!("{report}.menubar.png"), false, 1.0) {
+        Ok(ok_items) => {
+            lines.push(format!(
+                "menu bar render: {}",
+                if ok_items { "ok" } else { "FAILED" }
+            ));
+            ok &= ok_items;
+        }
+        Err(e) => {
+            lines.push(format!("menu bar render: FAILED ({e})"));
+            ok = false;
+        }
+    }
     let (pv_line, pv_ok) = preview::self_test();
     lines.push(pv_line);
     ok &= pv_ok;
@@ -1759,6 +1793,10 @@ fn self_test(report: &str) -> i32 {
             ));
             ok &= clipped && full && unclipped && restored;
         }
+        // The menu bar reserves the top strip and gives it back.
+        let (mb_line, mb_ok) = menubar::appbar_test();
+        lines.push(mb_line);
+        ok &= mb_ok;
         // Desktop icons: hide both, then put the old values back.
         log("self-test: desktop icons");
         let ids = [winsetup::THIS_PC, winsetup::RECYCLE_BIN];

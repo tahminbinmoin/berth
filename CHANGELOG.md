@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.5.0 — 2026-11-24
+
+- **New: Mac-style menu bar** (optional) along the top of the dock's display:
+  - a Berth menu with Windows Settings, Task Manager, Sleep, Restart, Shut Down, Lock and
+    Sign Out (restarting, shutting down and signing out ask first);
+  - the name of the app in front, with Hide, Hide Others, Show All and Quit;
+  - a Window menu with Minimize, Zoom, Close Window and Bring All to Front;
+  - search, the input language (with more than one keyboard layout), Wi-Fi, volume and
+    battery (opens Quick Settings), and the date and time (opens notifications).
+  It reserves its strip like the taskbar does, so maximized windows stay below it, and it
+  steps aside for full-screen apps. Turn it on in Dashboard > Appearance > Menu bar; new
+  installs get it in the Recommended setup.
+- Berth's taskbar hider keeps the menu bar's strip reserved.
+- CI checks that Windows reserves the strip and gives it back.
+
 ## 0.4.0 — 2026-11-24
 
 - **New: window previews.** Rest the pointer on an open app to see a live thumbnail of each

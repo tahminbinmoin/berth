@@ -94,6 +94,7 @@ struct Setup {
     taskbar_left: bool,
     hide_taskbar: bool,
     hide_icons: bool,
+    menu_bar: bool,
     updates: bool,
 }
 
@@ -287,6 +288,7 @@ pub fn render_to_files(dir: &str) -> Result<usize, String> {
                 taskbar_left: true,
                 hide_taskbar: true,
                 hide_icons: true,
+                menu_bar: true,
                 updates: true,
             });
         });
@@ -412,14 +414,14 @@ pub fn self_test() -> (Vec<String>, bool) {
     frame();
     let opened = with_dash(|d| d.setup.is_some()).unwrap_or(false);
     let before = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
-    sim_click(338.0, 160.0 + 4.0 * 60.0 + 29.0);
+    sim_click(338.0, 130.0 + 5.0 * 60.0 + 29.0);
     let after = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
     check(
         "setup panel tick",
         opened && before.is_some() && before != after,
         &mut lines,
     );
-    sim_click(576.0, 580.0);
+    sim_click(576.0, 610.0);
     check(
         "setup panel Not now",
         with_dash(|d| d.setup.is_none()).unwrap_or(false),
@@ -1314,6 +1316,25 @@ fn page_appearance(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
         magnify,
         |s, v| s.magnification = v,
     );
+    let y = section(ui, ny + 8.0, "Menu bar");
+    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    label(
+        ui,
+        rows[0],
+        ROW,
+        "Show the menu bar",
+        "A Mac-style bar along the top with the app in front, menus, Quick Settings and the clock",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("menubar"),
+        right(),
+        rows[0] + ROW / 2.0,
+        s.menu_bar,
+        true,
+    ) {
+        set(cmds, move |s| s.menu_bar = v);
+    }
     ny
 }
 
@@ -1981,7 +2002,7 @@ fn sheet_ui(
 
 // ----- "Recommended setup" panel -----------------------------------------------------
 
-const SETUP_ROWS: [(&str, &str); 5] = [
+const SETUP_ROWS: [(&str, &str); 6] = [
     (
         "Start Berth with Windows",
         "Opens quietly in the background when you sign in",
@@ -1999,6 +2020,10 @@ const SETUP_ROWS: [(&str, &str); 5] = [
         "Both stay on the dock",
     ),
     (
+        "Show a Mac-style menu bar at the top",
+        "The app in front, its menus, Quick Settings and the clock",
+    ),
+    (
         "Tell me about new versions",
         "Berth checks GitHub for updates; nothing else is sent",
     ),
@@ -2009,7 +2034,7 @@ fn setup_ui(ui: &mut Ui, setup: &mut Setup, snap: &Snap, cmds: &mut Vec<Cmd>) {
     ui.dy = 0.0;
     let full = RectF::new(0.0, 0.0, W, H);
     ui.fill_round(full, 0.0, ui.p.scrim);
-    let (pw, ph) = (580.0, 560.0);
+    let (pw, ph) = (580.0, 620.0);
     let panel = RectF::new((W - pw) / 2.0, (H - ph) / 2.0, pw, ph);
     for i in 0..8 {
         let g = 8.0 - i as f32;
@@ -2060,6 +2085,7 @@ fn setup_ui(ui: &mut Ui, setup: &mut Setup, snap: &Snap, cmds: &mut Vec<Cmd>) {
             1 => &mut setup.taskbar_left,
             2 => &mut setup.hide_taskbar,
             3 => &mut setup.hide_icons,
+            4 => &mut setup.menu_bar,
             _ => &mut setup.updates,
         };
         let enabled = !(i == 1 && left_disabled);
@@ -2282,6 +2308,7 @@ fn apply_setup(v: Setup) {
     with_app(|a| {
         a.settings.hide_taskbar = v.hide_taskbar;
         a.settings.check_updates_on_startup = v.updates;
+        a.settings.menu_bar = v.menu_bar;
         a.apply();
     });
     notify_changed();
@@ -2341,6 +2368,7 @@ fn run_cmds(cmds: Vec<Cmd>) {
                             taskbar_left: edge.is_some() && edge != Some(BarEdge::Left),
                             hide_taskbar: true,
                             hide_icons: true,
+                            menu_bar: true,
                             updates: s.check_updates_on_startup,
                         });
                     });
