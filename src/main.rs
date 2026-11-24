@@ -75,11 +75,12 @@ const TIMER_SAVE: usize = 10;
 const TIMER_RELAYOUT: usize = 11;
 const TIMER_UPDATE_CHECK: usize = 12;
 const TIMER_TASKBAR: usize = 13;
+const TIMER_OFFER: usize = 14;
 /// How often Berth looks for updates while running (if notifications are on).
 const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
-const WHATS_NEW: &str = "New: Mac-style window animations. Turn them on in Dashboard > Behavior.";
+const WHATS_NEW: &str = "Berth now asks once about new optional features after an update.";
 
 pub struct App {
     pub settings: Settings,
@@ -901,6 +902,67 @@ pub fn undo_setup() {
     dashboard::refresh();
 }
 
+/// Optional features added by updates. After an update Berth asks once
+/// about each one that is off, instead of leaving it hidden in the dashboard.
+const NEW_FEATURES: &[(&str, &str)] = &[
+    (
+        "menu_bar",
+        "New in Berth: a Mac-style menu bar.\n\nIt runs along the top of the screen with the app in front, its menus, Quick Settings and the clock. Maximized windows sit below it.\n\nTurn it on now? You can change this any time in Dashboard > Appearance.",
+    ),
+    (
+        "window_animations",
+        "New in Berth: Mac-style window animations.\n\nWindows shrink into the dock when you minimize them and grow back out of their icon when you click it.\n\nWhile this is on, Windows' own minimize animation is switched off until you sign out or turn this off.\n\nTurn it on now? You can change this any time in Dashboard > Behavior.",
+    ),
+];
+
+fn feature_on(s: &Settings, id: &str) -> bool {
+    match id {
+        "menu_bar" => s.menu_bar,
+        "window_animations" => s.window_animations,
+        _ => true,
+    }
+}
+
+fn mark_features_offered() {
+    with_app(|a| {
+        for (id, _) in NEW_FEATURES {
+            if !a.settings.offered_features.iter().any(|x| x == id) {
+                a.settings.offered_features.push(id.to_string());
+            }
+        }
+        a.schedule_save();
+    });
+}
+
+fn offer_new_features() {
+    for (id, question) in NEW_FEATURES {
+        let Some((offered, on)) = with_app(|a| {
+            (
+                a.settings.offered_features.iter().any(|x| x == id),
+                feature_on(&a.settings, id),
+            )
+        }) else {
+            return;
+        };
+        if offered {
+            continue;
+        }
+        let yes = !on && util::ask_box(None, question);
+        with_app(|a| {
+            if yes {
+                match *id {
+                    "menu_bar" => a.settings.menu_bar = true,
+                    "window_animations" => a.settings.window_animations = true,
+                    _ => {}
+                }
+                log(&format!("turned on after update: {id}"));
+            }
+            a.settings.offered_features.push(id.to_string());
+            a.apply();
+        });
+    }
+}
+
 fn quit() {
     menubar::shutdown();
     winanim::set_enabled(false);
@@ -1010,6 +1072,10 @@ unsafe extern "system" fn controller_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: 
                     if let Some(Err(e)) = with_app(|a| a.save_now()) {
                         error_box(None, &format!("Berth couldn't save its settings.\n\n{e}"));
                     }
+                }
+                TIMER_OFFER => {
+                    let _ = KillTimer(Some(hwnd), TIMER_OFFER);
+                    offer_new_features();
                 }
                 TIMER_TASKBAR => {
                     with_app(|a| a.taskbar_tick());
@@ -1593,6 +1659,7 @@ fn main() {
     let migrated = config::MIGRATED_TO_V2.load(std::sync::atomic::Ordering::Relaxed);
     if args.after_update.is_some() || (migrated && !first_run) {
         log(&format!("now running Berth {VERSION} after an update"));
+        unsafe { SetTimer(Some(controller), TIMER_OFFER, 2500, None) };
         let body = if migrated {
             format!("{WHATS_NEW} Update notifications are now on; turn them off in Dashboard > Updates.")
         } else {
@@ -1614,6 +1681,8 @@ fn main() {
         util::warn_box(None, &n);
     }
     if first_run {
+        // The Recommended setup panel covers the optional features.
+        mark_features_offered();
         dashboard::first_run_welcome();
     }
 

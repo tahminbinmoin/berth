@@ -89,6 +89,8 @@ pub struct Settings {
     pub menu_bar: bool,
     /// Mac-style minimize/restore/launch animations into and out of the dock.
     pub window_animations: bool,
+    /// Optional features Berth has already offered after an update.
+    pub offered_features: Vec<String>,
     pub auto_hide: bool,
     pub hide_in_fullscreen: bool,
     /// Look for a new release on GitHub at start-up and twice a day, and
@@ -130,6 +132,7 @@ impl Default for Settings {
             trash_at_end: true,
             menu_bar: false,
             window_animations: false,
+            offered_features: Vec::new(),
             auto_hide: false,
             hide_in_fullscreen: true,
             check_updates_on_startup: true,
@@ -179,6 +182,7 @@ impl Settings {
             taskbar_autohide_before: self.taskbar_autohide_before,
             taskbar_hidden_by_berth: self.taskbar_hidden_by_berth,
             taskbar_edge_before: self.taskbar_edge_before,
+            offered_features: self.offered_features.clone(),
             desktop_icons_before: self.desktop_icons_before,
             ..Settings::default()
         }
