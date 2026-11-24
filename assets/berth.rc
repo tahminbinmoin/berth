@@ -5,8 +5,8 @@
 1 RT_MANIFEST "berth.exe.manifest"
 
 VS_VERSION_INFO VERSIONINFO
- FILEVERSION 0,6,1,0
- PRODUCTVERSION 0,6,1,0
+ FILEVERSION 0,6,2,0
+ PRODUCTVERSION 0,6,2,0
  FILEFLAGSMASK 0x3fL
  FILEFLAGS 0x0L
  FILEOS 0x40004L
@@ -19,12 +19,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Berth contributors"
             VALUE "FileDescription", "Berth dock"
-            VALUE "FileVersion", "0.6.1"
+            VALUE "FileVersion", "0.6.2"
             VALUE "InternalName", "Berth"
             VALUE "LegalCopyright", "Copyright (c) 2026 Tahmin Bin Moin and Berth contributors. MIT License."
             VALUE "OriginalFilename", "Berth.exe"
             VALUE "ProductName", "Berth"
-            VALUE "ProductVersion", "0.6.1"
+            VALUE "ProductVersion", "0.6.2"
         END
     END
     BLOCK "VarFileInfo"
