@@ -9,6 +9,7 @@
   While on, Windows' own minimize/maximize animation is switched off for the current
   sign-in only, and switched back on when the option is turned off or Berth quits.
 - New installs get it in the Recommended setup panel.
+- Window previews now show minimized windows too, not just the app's icon.
 - CI checks that Windows draws live window thumbnails on Berth's overlay.
 
 ## 0.5.0 — 2026-11-24

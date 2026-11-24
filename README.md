@@ -385,8 +385,8 @@ This is the first release. Please read these before relying on it.
   They can't show an app's own File, Edit or View menus. The Wi-Fi and volume symbols don't
   show live status; click them to open Windows' Quick Settings. The menu bar appears on the
   dock's display only.
-- **Window previews** are drawn by Windows itself. Minimized windows show the app's icon
-  instead of a picture, because Windows has nothing to show for them.
+- **Window previews** are drawn by Windows itself, including the last picture of
+  minimized windows (the app's icon shows if Windows has none).
 - **Import from taskbar** finds desktop apps pinned to the taskbar. Apps from the Microsoft
   Store that are pinned there aren't stored as shortcuts, so add those with **Add apps**.
 - **One dock, one display** at a time. Top-edge placement isn't offered.

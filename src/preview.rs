@@ -470,9 +470,8 @@ impl Preview {
     /// Registers a live DWM thumbnail for each window that isn't minimized.
     fn place_thumbs(&mut self) {
         for c in &mut self.cards {
-            if c.minimized {
-                continue;
-            }
+            // Windows keeps a picture of minimized windows too; the app icon
+            // drawn underneath shows only if it has none.
             let Ok(t) = (unsafe { DwmRegisterThumbnail(self.hwnd, c.hwnd) }) else {
                 continue;
             };
