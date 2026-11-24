@@ -521,6 +521,7 @@ fn restore_bars() {
 /// handler): show every taskbar and give it its strip back.
 pub fn emergency_restore() {
     crate::menubar::shutdown();
+    crate::winanim::restore_system();
     restore_bars();
 }
 

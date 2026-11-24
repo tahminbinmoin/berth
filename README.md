@@ -36,6 +36,12 @@ taskbar away until you need it), and you control all of it from a dashboard.
   more than one), Wi-Fi, volume and battery (click for Quick Settings), and the date and
   time (click for notifications). Windows keeps maximized windows below it. Turn it on in
   **Dashboard > Appearance > Menu bar** or in the Recommended setup.
+- **Mac-style window animations (optional):** windows shrink into their app's dock icon
+  when you minimize them and grow back out when you click the icon, and apps opened from
+  the dock zoom out of their icon. Turn it on in **Dashboard > Behavior**. While it's on,
+  Berth switches off Windows' own minimize/maximize animation for the current sign-in only
+  (so the two don't play at once) and switches it back on when you turn the option off or
+  quit Berth.
 - **Mac-style touches:** drag an icon off the dock to remove it, the Recycle Bin sits at
   the end after a divider (drop files on it to delete them), and an app's icon bounces
   when one of its windows needs your attention.
@@ -336,7 +342,7 @@ Berth doesn't install anything else, write to system folders, or change system f
 
 This is the first release. Please read these before relying on it.
 
-- **Testing so far:** Berth 0.5.0 is built and automatically self-tested on Windows Server
+- **Testing so far:** Berth 0.6.0 is built and automatically self-tested on Windows Server
   2025 (the Windows 11 24H2 code base) in GitHub Actions, and it was exercised by hand under
   Wine during development. It has **not yet been tested by hand on a physical Windows 11
   PC**. Expect rough edges, and please report them.
@@ -371,12 +377,16 @@ This is the first release. Please read these before relying on it.
   restarts Explorer to apply it. Left, top and right are only available on Windows 11
   builds that support them (Berth checks and reverts if not). Microsoft doesn't document
   this value, so a future Windows update could change it; Berth always checks the result.
+- **Window animations** use the live picture Windows keeps of each window, drawn as a
+  rectangle that is squeezed along a curve; Windows can't bend it into a true "genie"
+  shape. Closing a window isn't animated, because Windows reports a closed window only
+  after it has gone. Restoring is animated when you click the dock icon (not from Alt+Tab).
 - **The menu bar's app menus** act on whole windows (hide, quit, minimize, zoom, close).
   They can't show an app's own File, Edit or View menus. The Wi-Fi and volume symbols don't
   show live status; click them to open Windows' Quick Settings. The menu bar appears on the
   dock's display only.
-- **Window previews** are drawn by Windows itself. Minimized windows show the app's icon
-  instead of a picture, because Windows has nothing to show for them.
+- **Window previews** are drawn by Windows itself, including the last picture of
+  minimized windows (the app's icon shows if Windows has none).
 - **Import from taskbar** finds desktop apps pinned to the taskbar. Apps from the Microsoft
   Store that are pinned there aren't stored as shortcuts, so add those with **Add apps**.
 - **One dock, one display** at a time. Top-edge placement isn't offered.

@@ -95,6 +95,7 @@ struct Setup {
     hide_taskbar: bool,
     hide_icons: bool,
     menu_bar: bool,
+    animations: bool,
     updates: bool,
 }
 
@@ -289,6 +290,7 @@ pub fn render_to_files(dir: &str) -> Result<usize, String> {
                 hide_taskbar: true,
                 hide_icons: true,
                 menu_bar: true,
+                animations: true,
                 updates: true,
             });
         });
@@ -414,7 +416,7 @@ pub fn self_test() -> (Vec<String>, bool) {
     frame();
     let opened = with_dash(|d| d.setup.is_some()).unwrap_or(false);
     let before = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
-    sim_click(338.0, 130.0 + 5.0 * 60.0 + 29.0);
+    sim_click(338.0, 130.0 + 6.0 * 54.0 + 26.0);
     let after = with_dash(|d| d.setup.map(|s| s.updates)).flatten();
     check(
         "setup panel tick",
@@ -1341,7 +1343,7 @@ fn page_appearance(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
 fn page_behavior(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
     let s = &snap.s;
     let mut y = section(ui, TOP, "Motion");
-    let (rows, ny) = card_rows(ui, y, &[ROW]);
+    let (rows, ny) = card_rows(ui, y, &[ROW, ROW]);
     label(
         ui,
         rows[0],
@@ -1364,6 +1366,23 @@ fn page_behavior(ui: &mut Ui, snap: &Snap, cmds: &mut Vec<Cmd>) -> f32 {
     ) {
         let m = [AnimationMode::System, AnimationMode::On, AnimationMode::Off][i.min(2)];
         set(cmds, move |s| s.animations = m);
+    }
+    label(
+        ui,
+        rows[1],
+        ROW,
+        "Mac-style window animations",
+        "Windows shrink into the dock when minimized and grow back out of their icon",
+        true,
+    );
+    if let Some(v) = ui.toggle(
+        id("winanim"),
+        right(),
+        rows[1] + ROW / 2.0,
+        s.window_animations,
+        true,
+    ) {
+        set(cmds, move |s| s.window_animations = v);
     }
     y = section(ui, ny + 8.0, "Running apps");
     let (rows, ny) = card_rows(ui, y, &[ROW, ROW, ROW, ROW]);
@@ -2002,7 +2021,7 @@ fn sheet_ui(
 
 // ----- "Recommended setup" panel -----------------------------------------------------
 
-const SETUP_ROWS: [(&str, &str); 6] = [
+const SETUP_ROWS: [(&str, &str); 7] = [
     (
         "Start Berth with Windows",
         "Opens quietly in the background when you sign in",
@@ -2022,6 +2041,10 @@ const SETUP_ROWS: [(&str, &str); 6] = [
     (
         "Show a Mac-style menu bar at the top",
         "The app in front, its menus, Quick Settings and the clock",
+    ),
+    (
+        "Mac-style window animations",
+        "Windows shrink into the dock and grow back out",
     ),
     (
         "Tell me about new versions",
@@ -2073,7 +2096,7 @@ fn setup_ui(ui: &mut Ui, setup: &mut Setup, snap: &Snap, cmds: &mut Vec<Cmd>) {
         w,
         true,
     );
-    let rh = 60.0;
+    let rh = 54.0;
     let list = RectF::new(x, panel.y + 96.0, w, rh * SETUP_ROWS.len() as f32 + 8.0);
     ui.card(list);
     let left_disabled = snap.edge == Some(BarEdge::Left);
@@ -2086,6 +2109,7 @@ fn setup_ui(ui: &mut Ui, setup: &mut Setup, snap: &Snap, cmds: &mut Vec<Cmd>) {
             2 => &mut setup.hide_taskbar,
             3 => &mut setup.hide_icons,
             4 => &mut setup.menu_bar,
+            5 => &mut setup.animations,
             _ => &mut setup.updates,
         };
         let enabled = !(i == 1 && left_disabled);
@@ -2309,6 +2333,7 @@ fn apply_setup(v: Setup) {
         a.settings.hide_taskbar = v.hide_taskbar;
         a.settings.check_updates_on_startup = v.updates;
         a.settings.menu_bar = v.menu_bar;
+        a.settings.window_animations = v.animations;
         a.apply();
     });
     notify_changed();
@@ -2369,6 +2394,7 @@ fn run_cmds(cmds: Vec<Cmd>) {
                             hide_taskbar: true,
                             hide_icons: true,
                             menu_bar: true,
+                            animations: true,
                             updates: s.check_updates_on_startup,
                         });
                     });
