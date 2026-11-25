@@ -21,7 +21,7 @@ use tiny_skia::{Pixmap, PixmapPaint, Transform};
 use windows::core::{w, BOOL, PCWSTR};
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Dwm::{
-    DwmFlush, DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
+    DwmGetWindowAttribute, DwmQueryThumbnailSourceSize, DwmRegisterThumbnail,
     DwmUnregisterThumbnail, DwmUpdateThumbnailProperties, DWMWA_EXTENDED_FRAME_BOUNDS,
     DWM_THUMBNAIL_PROPERTIES, DWM_TNP_OPACITY, DWM_TNP_RECTDESTINATION,
     DWM_TNP_SOURCECLIENTAREAONLY, DWM_TNP_VISIBLE,
@@ -819,16 +819,50 @@ impl Job {
         }
     }
 
-    /// One update per frame the compositor draws (60, 120, 144 Hz...).
+    /// One update per display refresh (60, 120, 144 Hz...), on a
+    /// high-precision timer, so the compositor always finds the newest
+    /// position waiting for it.
     fn run(self) {
+        use windows::Win32::System::Threading::{
+            CreateWaitableTimerExW, SetWaitableTimer, WaitForSingleObject,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE, TIMER_ALL_ACCESS,
+        };
+        let period = refresh_period();
+        let timer = unsafe {
+            CreateWaitableTimerExW(
+                None,
+                PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok();
+        let mut k: u32 = 0;
         loop {
-            // Waits for the next composition pass, so updates land in step
-            // with the display instead of on a coarse timer.
-            if unsafe { DwmFlush() }.is_err() {
-                std::thread::sleep(Duration::from_millis(8));
+            k += 1;
+            let due = self.start + period * k;
+            let now = Instant::now();
+            if due > now {
+                let wait = due - now;
+                match timer {
+                    Some(h) => unsafe {
+                        // Relative due time in 100 ns units (negative = relative).
+                        let rel = -((wait.as_nanos() / 100) as i64).max(1);
+                        if SetWaitableTimer(h, &rel, 0, None, None, false).is_ok() {
+                            WaitForSingleObject(h, INFINITE);
+                        } else {
+                            std::thread::sleep(wait);
+                        }
+                    },
+                    None => std::thread::sleep(wait),
+                }
+            } else {
+                // Running late: skip to the frame that is due now.
+                k = (now.duration_since(self.start).as_secs_f64() / period.as_secs_f64()) as u32
+                    + 1;
             }
             if GEN.load(Ordering::Relaxed) != self.gen {
-                return;
+                break;
             }
             let p = (self.start.elapsed().as_secs_f32() / self.dur.as_secs_f32()).min(1.0);
             self.apply(p);
@@ -836,6 +870,14 @@ impl Job {
             if p >= 1.0 {
                 break;
             }
+        }
+        if let Some(h) = timer {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(h);
+            }
+        }
+        if GEN.load(Ordering::Relaxed) != self.gen {
+            return;
         }
         unsafe {
             let _ = PostMessageW(
@@ -846,6 +888,24 @@ impl Job {
             );
         }
     }
+}
+
+/// The display's refresh period, as the compositor reports it (60 Hz if
+/// unknown; capped at 240 Hz).
+fn refresh_period() -> Duration {
+    use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
+    let mut ti = DWM_TIMING_INFO {
+        cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
+        ..Default::default()
+    };
+    let hz = unsafe { DwmGetCompositionTimingInfo(HWND::default(), &mut ti) }
+        .ok()
+        .filter(|_| ti.rateRefresh.uiDenominator != 0)
+        .map(|_| ti.rateRefresh.uiNumerator as f64 / ti.rateRefresh.uiDenominator as f64)
+        .filter(|hz| *hz >= 24.0)
+        .unwrap_or(60.0)
+        .min(240.0);
+    Duration::from_secs_f64(1.0 / hz)
 }
 
 /// `--self-test`: checks that Windows draws a live thumbnail of a minimized
@@ -1016,11 +1076,12 @@ pub fn self_test() -> Vec<(String, bool)> {
         let fps = finished_at
             .map(|d| frames as f32 / d.as_secs_f32())
             .unwrap_or(0.0);
+        let hz = 1.0 / refresh_period().as_secs_f32();
         out.push((
             format!(
-                "minimize animation played: {frames} frames in {finished_at:?} (~{fps:.0} fps)"
+                "minimize animation played: {frames} frames in {finished_at:?} (~{fps:.0} fps; display {hz:.0} Hz)"
             ),
-            ran && finished_at.is_some() && fps >= 40.0,
+            ran && finished_at.is_some() && fps >= hz.min(120.0) * 0.8,
         ));
         with_st(|s| s.surface = RECT::default());
         out.push((

@@ -80,7 +80,8 @@ const TIMER_OFFER: usize = 14;
 const UPDATE_CHECK_INTERVAL_MS: u32 = 12 * 60 * 60 * 1000;
 
 /// What's new in this version, shown after an update.
-const WHATS_NEW: &str = "Smoother Mac-style window animations, timed to your display's refresh rate.";
+const WHATS_NEW: &str =
+    "Smoother Mac-style window animations, timed to your display's refresh rate.";
 
 pub struct App {
     pub settings: Settings,
