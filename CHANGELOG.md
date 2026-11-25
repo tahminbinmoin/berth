@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.2 — 2026-11-25
+
+- **Smoother window animations.** Each frame of the minimize and restore animations is now
+  timed to the display's refresh rate (60, 120, 144 Hz…) with a high-precision timer on its
+  own thread, instead of a coarse timer on the busy main thread. The clear overlay the window is drawn on is prepared once,
+  not at the start of every animation, which removes the stutter at the beginning.
+- The launch zoom redraws only its own area each frame.
+- CI plays a real minimize animation and checks that it runs at close to the display's refresh rate.
+
 ## 0.6.1 — 2026-11-24
 
 - After an update, Berth now asks once whether to turn on new optional features (the menu

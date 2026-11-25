@@ -14,7 +14,7 @@
 //! turned off or Berth quits.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use tiny_skia::{Pixmap, PixmapPaint, Transform};
@@ -38,6 +38,14 @@ use crate::with_app;
 
 const CLASS: PCWSTR = w!("BerthWindowAnimation");
 const TIMER_FRAME: usize = 1;
+const TIMER_HIDE: usize = 2;
+/// Posted by the frame thread when an animation has played to the end.
+const WM_ANIM_DONE: u32 = WM_APP + 1;
+/// Bumped whenever an animation starts or stops; a frame thread whose
+/// number is no longer current stops.
+static GEN: AtomicU64 = AtomicU64::new(0);
+/// Frames drawn by frame threads (for the self-test).
+static FRAMES: AtomicU64 = AtomicU64::new(0);
 const MINIMIZE_MS: u64 = 430;
 const RESTORE_MS: u64 = 400;
 const LAUNCH_MS: u64 = 340;
@@ -68,8 +76,6 @@ struct Anim {
     restore: Vec<HWND>,
     icon_pm: Option<Pixmap>,
     dark: bool,
-    /// The real window is back; remove the overlay on the next tick.
-    finishing: bool,
 }
 
 struct Pending {
@@ -83,6 +89,10 @@ struct Pending {
 
 struct State {
     hwnd: HWND,
+    /// A second overlay for the launch "zoom" (redrawn every frame).
+    ghost: HWND,
+    /// The display the clear overlay surface is currently prepared for.
+    surface: RECT,
     anim: Option<Anim>,
     /// The overlay's position on screen while an animation runs.
     bbox: RECT,
@@ -109,7 +119,7 @@ pub fn register(hinst: HINSTANCE) -> bool {
     if unsafe { RegisterClassExW(&wc) } == 0 {
         return false;
     }
-    let Ok(hwnd) = (unsafe {
+    let make = || unsafe {
         CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
             CLASS,
@@ -124,12 +134,15 @@ pub fn register(hinst: HINSTANCE) -> bool {
             Some(hinst),
             None,
         )
-    }) else {
+    };
+    let (Ok(hwnd), Ok(ghost)) = (make(), make()) else {
         return false;
     };
     ST.with(|s| {
         *s.borrow_mut() = Some(State {
             hwnd,
+            ghost,
+            surface: RECT::default(),
             anim: None,
             bbox: RECT::default(),
             launch: None,
@@ -354,7 +367,6 @@ fn on_minimize(h: HWND) {
             restore: Vec::new(),
             icon_pm: None,
             dark: false,
-            finishing: false,
         });
         s.attach_thumb(h);
     });
@@ -389,7 +401,6 @@ pub fn restore_from_dock(windows: &[HWND], icon: RECT, edge: Edge) -> bool {
             restore: windows.to_vec(),
             icon_pm: None,
             dark: false,
-            finishing: false,
         });
         s.attach_thumb(h);
     })
@@ -500,25 +511,95 @@ impl State {
         }
     }
 
-    fn start(&mut self, a: Anim) {
-        self.finish();
-        // The overlay covers the path of the animation (plus a margin).
-        let m = 40;
-        let b = union(a.window, a.icon);
-        self.bbox = RECT {
-            left: b.left - m,
-            top: b.top - m,
-            right: b.right + m,
-            bottom: b.bottom + m,
+    /// Prepares the clear, click-through overlay for the display that holds
+    /// `r`, once (uploading a screen-sized surface is slow, so it isn't done
+    /// per animation).
+    fn ensure_surface(&mut self, r: RECT) {
+        let mon = unsafe { MonitorFromRect(&r, MONITOR_DEFAULTTONEAREST) };
+        let mut mi = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
         };
-        let w = (self.bbox.right - self.bbox.left).max(1);
-        let h = (self.bbox.bottom - self.bbox.top).max(1);
-        if a.kind != Kind::Launch {
-            // A clear, click-through surface for the thumbnail to sit on.
+        if !unsafe { GetMonitorInfoW(mon, &mut mi).as_bool() } {
+            return;
+        }
+        let m = mi.rcMonitor;
+        if m != self.surface {
+            let (w, h) = ((m.right - m.left).max(1), (m.bottom - m.top).max(1));
             if let Some(pm) = Pixmap::new(w as u32, h as u32) {
-                crate::preview::push_layered(self.hwnd, &pm, self.bbox.left, self.bbox.top);
+                crate::preview::push_layered(self.hwnd, &pm, m.left, m.top);
+                self.surface = m;
             }
         }
+    }
+
+    fn start(&mut self, a: Anim) {
+        self.finish();
+        let gen = GEN.fetch_add(1, Ordering::Relaxed) + 1;
+        if a.kind == Kind::Launch {
+            let m = 40;
+            let b = union(a.window, a.icon);
+            self.bbox = RECT {
+                left: b.left - m,
+                top: b.top - m,
+                right: b.right + m,
+                bottom: b.bottom + m,
+            };
+            self.anim = Some(a);
+            self.ensure_timer();
+            self.paint_launch(0.0);
+            unsafe {
+                let _ = SetWindowPos(
+                    self.ghost,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                );
+            }
+            return;
+        }
+        self.ensure_surface(a.icon);
+        self.bbox = self.surface;
+        self.anim = Some(a);
+        let _ = gen;
+    }
+
+    /// Registers the window's live thumbnail, shows the first frame at once
+    /// and hands the rest to a frame thread paced by the compositor.
+    fn attach_thumb(&mut self, src: HWND) {
+        let Some(a) = self.anim.as_mut() else { return };
+        let Ok(t) = (unsafe { DwmRegisterThumbnail(self.hwnd, src) }) else {
+            self.finish();
+            return;
+        };
+        let ok = unsafe { DwmQueryThumbnailSourceSize(t) }
+            .map(|s| s.cx > 0 && s.cy > 0)
+            .unwrap_or(false);
+        if !ok {
+            unsafe {
+                let _ = DwmUnregisterThumbnail(t);
+            }
+            self.finish();
+            return;
+        }
+        a.thumb = Some(t);
+        let job = Job {
+            thumb: t,
+            kind: a.kind,
+            window: a.window,
+            icon: a.icon,
+            edge: a.edge,
+            origin: (self.bbox.left, self.bbox.top),
+            start: Instant::now(),
+            dur: a.dur,
+            gen: GEN.load(Ordering::Relaxed),
+            overlay: self.hwnd.0 as isize,
+        };
+        a.start = job.start;
+        job.apply(0.0);
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
@@ -530,99 +611,40 @@ impl State {
                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
             );
         }
-        self.anim = Some(a);
-        self.ensure_timer();
-        self.frame();
+        std::thread::spawn(move || job.run());
     }
 
-    fn attach_thumb(&mut self, src: HWND) {
-        let Some(a) = self.anim.as_mut() else { return };
-        if let Ok(t) = unsafe { DwmRegisterThumbnail(self.hwnd, src) } {
-            let ok = unsafe { DwmQueryThumbnailSourceSize(t) }
-                .map(|s| s.cx > 0 && s.cy > 0)
-                .unwrap_or(false);
-            if ok {
-                a.thumb = Some(t);
-            } else {
-                unsafe {
-                    let _ = DwmUnregisterThumbnail(t);
-                }
-            }
-        }
-        self.frame();
-    }
-
-    fn frame(&mut self) {
-        let Some(a) = self.anim.as_ref() else { return };
-        if a.finishing {
-            self.finish();
+    /// The frame thread reached the end.
+    fn done(&mut self, gen: u64) {
+        if gen != GEN.load(Ordering::Relaxed) {
             return;
         }
-        let p = (a.start.elapsed().as_secs_f32() / a.dur.as_secs_f32()).min(1.0);
-        match a.kind {
-            Kind::Minimize | Kind::Restore => {
-                let q = if a.kind == Kind::Minimize { p } else { 1.0 - p };
-                let r = genie(a.window, a.icon, a.edge, q);
-                if let Some(t) = a.thumb {
-                    let props = DWM_THUMBNAIL_PROPERTIES {
-                        dwFlags: DWM_TNP_RECTDESTINATION
-                            | DWM_TNP_VISIBLE
-                            | DWM_TNP_OPACITY
-                            | DWM_TNP_SOURCECLIENTAREAONLY,
-                        rcDestination: RECT {
-                            left: (r.x - self.bbox.left as f32).round() as i32,
-                            top: (r.y - self.bbox.top as f32).round() as i32,
-                            right: (r.x + r.w - self.bbox.left as f32).round() as i32,
-                            bottom: (r.y + r.h - self.bbox.top as f32).round() as i32,
-                        },
-                        opacity: (255.0 - 90.0 * q.powi(3)) as u8,
-                        fVisible: BOOL(1),
-                        fSourceClientAreaOnly: BOOL(0),
-                        ..Default::default()
-                    };
-                    unsafe {
-                        let _ = DwmUpdateThumbnailProperties(t, &props);
-                    }
-                }
-            }
-            Kind::Launch => self.paint_launch(p),
+        let Some(a) = self.anim.as_mut() else { return };
+        if a.kind == Kind::Restore && !a.restore.is_empty() {
+            // Bring the real window back under the last frame, then take
+            // the overlay away a moment later so nothing flickers.
+            let wins = std::mem::take(&mut a.restore);
+            crate::apps::activate(&wins);
+            unsafe { SetTimer(Some(self.hwnd), TIMER_HIDE, 45, None) };
+            return;
         }
-        if p >= 1.0 {
-            let restore = self.anim.as_ref().map(|a| (a.kind, a.restore.clone()));
-            if let Some((Kind::Restore, wins)) = restore {
-                // Bring the real window back under the last frame, then
-                // remove the overlay on the next tick.
-                crate::apps::activate(&wins);
-                if let Some(a) = self.anim.as_mut() {
-                    a.restore.clear();
-                    a.finishing = true;
-                }
-                return;
-            }
-            self.finish();
-        }
+        self.finish();
     }
 
     /// Launch: a soft glassy frame with the app's icon grows from the dock
-    /// icon to the new window and fades.
+    /// icon to the new window and fades. Only the frame's own area is redrawn.
     fn paint_launch(&mut self, p: f32) {
         let Some(a) = self.anim.as_ref() else { return };
-        let w = (self.bbox.right - self.bbox.left).max(1);
-        let h = (self.bbox.bottom - self.bbox.top).max(1);
-        let Some(mut pm) = Pixmap::new(w as u32, h as u32) else {
-            return;
-        };
         let e = ease_out(p);
-        let (ox, oy) = (self.bbox.left as f32, self.bbox.top as f32);
         let ir = RectF::new(
-            a.icon.left as f32 - ox,
-            a.icon.top as f32 - oy,
+            a.icon.left as f32,
+            a.icon.top as f32,
             (a.icon.right - a.icon.left) as f32,
             (a.icon.bottom - a.icon.top) as f32,
         );
         let wr = RectF::new(
-            a.window.left as f32 - ox,
-            a.window.top as f32 - oy,
+            a.window.left as f32,
+            a.window.top as f32,
             (a.window.right - a.window.left) as f32,
             (a.window.bottom - a.window.top) as f32,
         );
@@ -632,8 +654,18 @@ impl State {
             lerp(ir.w, wr.w, e),
             lerp(ir.h, wr.h, e),
         );
+        let pad = 4.0;
+        let (ox, oy) = ((r.x - pad).floor(), (r.y - pad).floor());
+        let (w, h) = (
+            (r.w + 2.0 * pad).ceil() as u32 + 1,
+            (r.h + 2.0 * pad).ceil() as u32 + 1,
+        );
+        let Some(mut pm) = Pixmap::new(w.max(1), h.max(1)) else {
+            return;
+        };
+        let lr = RectF::new(r.x - ox, r.y - oy, r.w, r.h);
         let alpha = (1.0 - p).powf(1.4);
-        if let Some(path) = draw::rounded_rect(r, lerp(12.0, 8.0, e)) {
+        if let Some(path) = draw::rounded_rect(lr, lerp(12.0, 8.0, e)) {
             let fill = if a.dark {
                 rgba(255, 255, 255, 0.10 * alpha)
             } else {
@@ -646,8 +678,8 @@ impl State {
             let sz = lerp(ir.w, (wr.w.min(wr.h) * 0.28).min(256.0), e).max(8.0);
             if let Some(scaled) = crate::icons::scale_to(icon, sz.round() as u32) {
                 pm.draw_pixmap(
-                    (r.cx() - sz / 2.0).round() as i32,
-                    (r.cy() - sz / 2.0).round() as i32,
+                    (lr.cx() - sz / 2.0).round() as i32,
+                    (lr.cy() - sz / 2.0).round() as i32,
                     scaled.as_ref(),
                     &PixmapPaint {
                         opacity: alpha,
@@ -658,10 +690,14 @@ impl State {
                 );
             }
         }
-        crate::preview::push_layered(self.hwnd, &pm, self.bbox.left, self.bbox.top);
+        crate::preview::push_layered(self.ghost, &pm, ox as i32, oy as i32);
     }
 
     fn finish(&mut self) {
+        GEN.fetch_add(1, Ordering::Relaxed);
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_HIDE);
+        }
         if let Some(a) = self.anim.take() {
             if let Some(t) = a.thumb {
                 unsafe {
@@ -673,6 +709,7 @@ impl State {
             }
             unsafe {
                 let _ = ShowWindow(self.hwnd, SW_HIDE);
+                let _ = ShowWindow(self.ghost, SW_HIDE);
             }
         }
         if self.launch.is_none() && self.timer {
@@ -684,52 +721,191 @@ impl State {
     }
 
     fn tick(&mut self) {
-        if self.anim.is_some() {
-            self.frame();
+        // The launch zoom is drawn here; minimize/restore run on a frame thread.
+        if let Some(a) = self.anim.as_ref() {
+            if a.kind == Kind::Launch {
+                let p = (a.start.elapsed().as_secs_f32() / a.dur.as_secs_f32()).min(1.0);
+                if p >= 0.9 {
+                    self.finish();
+                } else {
+                    self.paint_launch(p);
+                }
+            }
+            return;
         }
         // Waiting for a launched app's first window.
-        if self.anim.is_none() {
-            if let Some(pd) = self.launch.as_ref() {
-                if pd.since.elapsed() > Duration::from_secs(12) {
-                    self.launch = None;
-                    self.finish();
-                    return;
-                }
-                let target = pd.target.clone();
-                let found = with_app(|a| {
-                    a.dock
-                        .entries
-                        .iter()
-                        .find(|e| e.item.target.eq_ignore_ascii_case(&target))
-                        .and_then(|e| e.windows.first().copied())
-                })
-                .flatten();
-                if let Some(h) = found {
-                    let visible = unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() };
-                    if let (true, Some(r)) = (visible, frame_bounds(h)) {
-                        let pd = self.launch.take().unwrap();
-                        if same_monitor(r, pd.icon) {
-                            self.start(Anim {
-                                kind: Kind::Launch,
-                                window: r,
-                                icon: pd.icon,
-                                edge: pd.edge,
-                                start: Instant::now(),
-                                dur: Duration::from_millis(LAUNCH_MS),
-                                thumb: None,
-                                restore: Vec::new(),
-                                icon_pm: pd.icon_pm,
-                                dark: pd.dark,
-                                finishing: false,
-                            });
-                        }
+        if let Some(pd) = self.launch.as_ref() {
+            if pd.since.elapsed() > Duration::from_secs(12) {
+                self.launch = None;
+                self.finish();
+                return;
+            }
+            let target = pd.target.clone();
+            let found = with_app(|a| {
+                a.dock
+                    .entries
+                    .iter()
+                    .find(|e| e.item.target.eq_ignore_ascii_case(&target))
+                    .and_then(|e| e.windows.first().copied())
+            })
+            .flatten();
+            if let Some(h) = found {
+                let visible = unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() };
+                if let (true, Some(r)) = (visible, frame_bounds(h)) {
+                    let pd = self.launch.take().unwrap();
+                    if same_monitor(r, pd.icon) {
+                        self.start(Anim {
+                            kind: Kind::Launch,
+                            window: r,
+                            icon: pd.icon,
+                            edge: pd.edge,
+                            start: Instant::now(),
+                            dur: Duration::from_millis(LAUNCH_MS),
+                            thumb: None,
+                            restore: Vec::new(),
+                            icon_pm: pd.icon_pm,
+                            dark: pd.dark,
+                        });
                     }
                 }
-            } else {
-                self.finish();
             }
+        } else {
+            self.finish();
         }
     }
+}
+
+/// What a frame thread needs to move one thumbnail.
+struct Job {
+    thumb: isize,
+    kind: Kind,
+    window: RECT,
+    icon: RECT,
+    edge: Edge,
+    origin: (i32, i32),
+    start: Instant,
+    dur: Duration,
+    gen: u64,
+    overlay: isize,
+}
+
+impl Job {
+    fn apply(&self, p: f32) {
+        let q = if self.kind == Kind::Minimize {
+            p
+        } else {
+            1.0 - p
+        };
+        let r = genie(self.window, self.icon, self.edge, q);
+        let (ox, oy) = (self.origin.0 as f32, self.origin.1 as f32);
+        let props = DWM_THUMBNAIL_PROPERTIES {
+            dwFlags: DWM_TNP_RECTDESTINATION
+                | DWM_TNP_VISIBLE
+                | DWM_TNP_OPACITY
+                | DWM_TNP_SOURCECLIENTAREAONLY,
+            rcDestination: RECT {
+                left: (r.x - ox).round() as i32,
+                top: (r.y - oy).round() as i32,
+                right: (r.x + r.w - ox).round() as i32,
+                bottom: (r.y + r.h - oy).round() as i32,
+            },
+            opacity: (255.0 - 90.0 * q.powi(3)) as u8,
+            fVisible: BOOL(1),
+            fSourceClientAreaOnly: BOOL(0),
+            ..Default::default()
+        };
+        unsafe {
+            let _ = DwmUpdateThumbnailProperties(self.thumb, &props);
+        }
+    }
+
+    /// One update per display refresh (60, 120, 144 Hz...), on a
+    /// high-precision timer, so the compositor always finds the newest
+    /// position waiting for it.
+    fn run(self) {
+        use windows::Win32::System::Threading::{
+            CreateWaitableTimerExW, SetWaitableTimer, WaitForSingleObject,
+            CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, INFINITE, TIMER_ALL_ACCESS,
+        };
+        let period = refresh_period();
+        let timer = unsafe {
+            CreateWaitableTimerExW(
+                None,
+                PCWSTR::null(),
+                CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                TIMER_ALL_ACCESS.0,
+            )
+        }
+        .ok();
+        let mut k: u32 = 0;
+        loop {
+            k += 1;
+            let due = self.start + period * k;
+            let now = Instant::now();
+            if due > now {
+                let wait = due - now;
+                match timer {
+                    Some(h) => unsafe {
+                        // Relative due time in 100 ns units (negative = relative).
+                        let rel = -((wait.as_nanos() / 100) as i64).max(1);
+                        if SetWaitableTimer(h, &rel, 0, None, None, false).is_ok() {
+                            WaitForSingleObject(h, INFINITE);
+                        } else {
+                            std::thread::sleep(wait);
+                        }
+                    },
+                    None => std::thread::sleep(wait),
+                }
+            } else {
+                // Running late: skip to the frame that is due now.
+                k = (now.duration_since(self.start).as_secs_f64() / period.as_secs_f64()) as u32
+                    + 1;
+            }
+            if GEN.load(Ordering::Relaxed) != self.gen {
+                break;
+            }
+            let p = (self.start.elapsed().as_secs_f32() / self.dur.as_secs_f32()).min(1.0);
+            self.apply(p);
+            FRAMES.fetch_add(1, Ordering::Relaxed);
+            if p >= 1.0 {
+                break;
+            }
+        }
+        if let Some(h) = timer {
+            unsafe {
+                let _ = windows::Win32::Foundation::CloseHandle(h);
+            }
+        }
+        if GEN.load(Ordering::Relaxed) != self.gen {
+            return;
+        }
+        unsafe {
+            let _ = PostMessageW(
+                Some(HWND(self.overlay as *mut _)),
+                WM_ANIM_DONE,
+                WPARAM(self.gen as usize),
+                LPARAM(0),
+            );
+        }
+    }
+}
+
+/// The display's refresh period, as the compositor reports it (60 Hz if
+/// unknown; capped at 240 Hz).
+fn refresh_period() -> Duration {
+    use windows::Win32::Graphics::Dwm::{DwmGetCompositionTimingInfo, DWM_TIMING_INFO};
+    let mut ti = DWM_TIMING_INFO {
+        cbSize: std::mem::size_of::<DWM_TIMING_INFO>() as u32,
+        ..Default::default()
+    };
+    let hz = unsafe { DwmGetCompositionTimingInfo(HWND::default(), &mut ti) }
+        .ok()
+        .filter(|_| ti.rateRefresh.uiDenominator != 0)
+        .map(|_| ti.rateRefresh.uiNumerator as f64 / ti.rateRefresh.uiDenominator as f64)
+        .filter(|hz| *hz >= 24.0)
+        .unwrap_or(60.0)
+        .min(240.0);
+    Duration::from_secs_f64(1.0 / hz)
 }
 
 /// `--self-test`: checks that Windows draws a live thumbnail of a minimized
@@ -851,6 +1027,63 @@ pub fn self_test() -> Vec<(String, bool)> {
                     .push_str(" [not drawn by Windows; animation would be invisible]");
             }
         }
+        // Play a real minimize animation and count the frames delivered.
+        FRAMES.store(0, Ordering::Relaxed);
+        let icon = RECT {
+            left: 600,
+            top: 700,
+            right: 664,
+            bottom: 764,
+        };
+        let started = Instant::now();
+        let ran = with_st(|s| {
+            s.surface = RECT::default();
+            s.start(Anim {
+                kind: Kind::Minimize,
+                window: RECT {
+                    left: 60,
+                    top: 60,
+                    right: 420,
+                    bottom: 320,
+                },
+                icon,
+                edge: Edge::Bottom,
+                start: Instant::now(),
+                dur: Duration::from_millis(MINIMIZE_MS),
+                thumb: None,
+                restore: Vec::new(),
+                icon_pm: None,
+                dark: false,
+            });
+            s.attach_thumb(src);
+            s.anim.is_some()
+        })
+        .unwrap_or(false);
+        // Pump messages until the frame thread reports the end.
+        let mut finished_at = None;
+        while started.elapsed() < Duration::from_millis(1500) {
+            let mut msg = MSG::default();
+            while PeekMessageW(&mut msg, None, 0, 0, PM_REMOVE).as_bool() {
+                let _ = TranslateMessage(&msg);
+                DispatchMessageW(&msg);
+            }
+            if finished_at.is_none() && with_st(|s| s.anim.is_none()).unwrap_or(false) {
+                finished_at = Some(started.elapsed());
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        let frames = FRAMES.load(Ordering::Relaxed);
+        let fps = finished_at
+            .map(|d| frames as f32 / d.as_secs_f32())
+            .unwrap_or(0.0);
+        let hz = 1.0 / refresh_period().as_secs_f32();
+        out.push((
+            format!(
+                "minimize animation played: {frames} frames in {finished_at:?} (~{fps:.0} fps; display {hz:.0} Hz)"
+            ),
+            ran && finished_at.is_some() && fps >= hz.min(120.0) * 0.8,
+        ));
+        with_st(|s| s.surface = RECT::default());
         out.push((
             format!("restored rectangle of a minimized window: {r_min:?}"),
             r_min.map(|r| r.right - r.left > 200).unwrap_or(false),
@@ -891,6 +1124,14 @@ unsafe extern "system" fn proc_(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) ->
     match msg {
         WM_TIMER if wp.0 == TIMER_FRAME => {
             with_st(|s| s.tick());
+            LRESULT(0)
+        }
+        WM_TIMER if wp.0 == TIMER_HIDE => {
+            with_st(|s| s.finish());
+            LRESULT(0)
+        }
+        WM_ANIM_DONE => {
+            with_st(|s| s.done(wp.0 as u64));
             LRESULT(0)
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
